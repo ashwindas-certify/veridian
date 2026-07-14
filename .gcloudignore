@@ -1,0 +1,25 @@
+.git/
+.gitignore
+# secrets & PHI — never upload to the build
+.token
+create-*.json
+*service-account*.json
+*-key.json
+packets/
+*.pdf
+audit_history.jsonl
+*.csv
+*.xlsx
+master_records.json
+workflows_10.json
+wf_sample.json
+flags.json
+*_guidelines.txt
+clients/*.guidelines.txt
+clients/*.generated.json
+url.txt
+__pycache__/
+*.pyc
+.venv/
+venv/
+_chk.js
