@@ -21,7 +21,7 @@ Extract ONLY what is actually present in the document, as JSON with this shape:
  "npdb_report_present": boolean,
  "npdb": {"present": boolean, "subject_name": string, "npi": string, "date_of_birth": string, "report_count": number},
  "sanctions_screened": [ "OIG","SAM", ... ],
- "documents_present": [ {"label": string, "category": string} ]
+ "documents_present": [ {"label": string, "category": string, "date": string} ]
 }
 Notes:
 - holder_name / registrant_name / subject_name are the person the license / DEA certificate / NPDB
@@ -40,6 +40,9 @@ Notes:
   * category: map it to ONE of exactly these buckets (or "Other"):
     "State License", "DEA / CDS", "Board Certification", "Malpractice / COI", "Diploma / Education",
     "NPDB Report", "Sanctions Screening", "CV / Resume", "W-9 / Tax", "Attestation / Release", "Other".
+  * date: the verification / report / "generated on" / "as of" date PRINTED on that document —
+    check the HEADER, FOOTER, and body (e.g. a primary-source verification date, NPDB report date,
+    or query date). Return YYYY-MM-DD; "" if no date is printed on the document.
 Dates as YYYY-MM-DD when possible. Do not invent values."""
 
 def extract(pdf_path):

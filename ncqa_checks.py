@@ -105,6 +105,58 @@ def check_license_restrictions(record):
     return flags
 
 
+# Map a document category/label to the platform element whose verification date it should match.
+_DOC_CAT_TO_ELEM = {
+    "state license": "stateLicenses", "license": "stateLicenses", "dea": "dea", "cds": "dea",
+    "board": "boardCertifications", "malpractice": "malpractice", "coi": "malpractice",
+    "liability": "malpractice", "npdb": "npdb", "national practitioner": "npdb",
+}
+
+def _platform_dates(record, elem):
+    dates = []
+    for r in record.get(elem) or []:
+        for k in ("verified_at", "report_date", "data_last_acquired_date"):
+            d = _d(r.get(k))
+            if d:
+                dates.append(d)
+    return dates
+
+def check_document_freshness(record, packet, stale_days=180, mismatch_days=120):
+    """Read the date printed on each supporting document (header/footer) and compare it to the
+    platform, PER ELEMENT. An element can have several documents, so we only flag when the MOST
+    RECENT document for that element is stale, and only flag a date mismatch when NONE of that
+    element's documents match any platform verification/report date (so a recently regenerated/
+    uploaded record doesn't get false-flagged)."""
+    flags = []
+    tl = record.get("timeline") or {}
+    decision = _d(tl.get("psvCompleteDate") or tl.get("decisionDate")) or datetime.now()
+    by_cat = {}   # category -> [dates printed on its documents]
+    for item in (packet or {}).get("documents_present") or []:
+        if not isinstance(item, dict):
+            continue
+        dd = _d(item.get("date"))
+        if dd:
+            by_cat.setdefault(item.get("category") or item.get("label") or "document", []).append(dd)
+    for cat, dates in by_cat.items():
+        recent = max(dates)                      # newest supporting document for this element
+        catl = cat.lower()
+        if (decision - recent).days > stale_days:
+            flags.append(_flag(record, "document", "DOCUMENT_STALE", "warning", 0.65,
+                f"{cat}: the most recent supporting document is dated {recent.date()} — "
+                f"{(decision - recent).days} days before the credentialing decision; confirm a current "
+                f"primary source was pulled.", "Missing Documents"))
+        elem = next((e for k, e in _DOC_CAT_TO_ELEM.items() if k in catl), None)
+        if elem:
+            pdates = _platform_dates(record, elem)
+            # mismatch only if NO document for this element matches ANY platform date
+            if pdates and all(all(abs((dd - pd).days) > mismatch_days for pd in pdates) for dd in dates):
+                nearest = min(pdates, key=lambda pd: abs((recent - pd).days))
+                flags.append(_flag(record, elem, "DOCUMENT_DATE_MISMATCH", "warning", 0.6,
+                    f"{cat}: no attached document date matches the platform verification/report date "
+                    f"({nearest.date()}) — confirm the attached document matches the platform record.",
+                    "Missing Documents"))
+    return flags
+
 def ncqa_checks(record, packet, attestation_days=180):
     """Run all cross-element NCQA checks and return the combined flags."""
     flags = []
@@ -112,4 +164,5 @@ def ncqa_checks(record, packet, attestation_days=180):
     flags += check_malpractice_history(record, packet)
     flags += check_sanctions_screening(record, packet)
     flags += check_license_restrictions(record)
+    flags += check_document_freshness(record, packet)
     return flags
