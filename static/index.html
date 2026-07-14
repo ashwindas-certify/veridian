@@ -484,21 +484,29 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <td style="text-align:center">${itcell(it.valueOk)}</td>
       <td style="text-align:center">${itcell(it.datesOk)}</td></tr>`;
     const docRow=d=>`<tr style="font-size:.75rem"><td style="padding:.2rem 0">${d.name||'document'}</td><td style="text-align:center">${d.verifiedAt?'<span style="color:var(--ok)">✓ '+d.verifiedAt+'</span>':'<span style="color:var(--warn)">not verified</span>'}</td><td style="color:var(--muted)">${d.verifiedBy||'—'}</td><td>${d.status||'—'}</td><td>${d.state||''}</td><td>${d.providerId&&d.docId?`<a href="/api/document-url?org=${ORG}&providerId=${encodeURIComponent(d.providerId)}&docId=${encodeURIComponent(d.docId)}" target="_blank" rel="noopener" style="color:var(--teal-d)">open</a>`:'—'}</td></tr>`;
+    const statPill=s=>{const m={ok:['Passed','var(--ok)'],review:['Review','var(--warn)'],error:['Attention','var(--err)'],na:['—','var(--line)']}[s]||['—','var(--line)'];return `<span style="font-weight:700;font-size:.78rem;color:${m[1]}">${_mdot(s)} ${m[0]}</span>`;};
+    const badge=t=>`<span style="font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:4px;margin:0 3px 2px 0;background:var(--ok);color:#fff;display:inline-block">${t}</span>`;
+    const chip=(lbl,v)=>v===true?`<span style="color:var(--ok);margin-right:8px;white-space:nowrap">${lbl} ✓</span>`:v===false?`<span style="color:var(--err);margin-right:8px;white-space:nowrap">${lbl} ✕</span>`:'';
+    const dateOf=s=>{const m=(s||'').match(/\d{4}-\d{2}-\d{2}/);return m?m[0]:'';};
     const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const du=e.docsUsed||[];const exp=n>0||du.length>0;
+      const pres=e.expectedButMissing?'<span style="color:var(--err);font-weight:700">MISSING</span>'
+        :([e.inPlatform?badge('Platform'):'',e.attested===true?badge('CAQH'):'',e.docPresent===true?badge('Doc'):''].join('')||'<span style="color:var(--muted)">—</span>');
+      const ver=e.verified===true?`<span style="color:var(--ok)">✓ verified</span>${dateOf(e.verifiedNote)?` <span style="color:var(--muted);font-size:.72rem">${dateOf(e.verifiedNote)}</span>`:''}`
+        :e.verified===false?'<span style="color:var(--err)">✕ not verified</span>':'<span style="color:var(--muted)">—</span>';
+      const checks=([chip('Source',e.sourceOk),chip('Value',e.valueOk),chip('Dates',e.datesOk),
+        e.activeOk===true?'<span style="color:var(--ok);margin-right:8px">Active</span>':e.activeOk===false?'<span style="color:var(--err);margin-right:8px">Expired</span>':'',
+        e.docRequired?chip('Doc',e.docPresent):''].join(''))||'<span style="color:var(--muted)">—</span>';
       const head=`<tr style="border-bottom:1px solid var(--line)">
-      <td style="padding:.45rem 6px .45rem 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}${e.element}${n?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.requiredWhy}">${e.required?'<span style="color:var(--ink)">Yes</span>':'<span style="color:var(--muted)">No</span>'}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center">${e.attested===true?'<span style="color:var(--ok)">Yes</span>':e.attested===false?'<span style="color:var(--muted)">No</span>':'<span style="color:var(--line)">n/a</span>'}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.verifiedNote}">${e.expectedButMissing?'<span style="color:var(--err);font-weight:700">MISSING</span>':_mchk(e.verified)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.sourceNote}">${_mchk(e.sourceOk)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.valueNote}">${_mchk(e.valueOk)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.docBasis||''}">${e.docRequired?_mchk(e.docPresent,'','missing'):(e.docPresent===null?'<span style="color:var(--line)">n/a</span>':(e.docPresent?'<span style="color:var(--ok)">✓</span>':'—'))}${du.length?` <span style="color:var(--muted);font-size:.68rem">(${du.length})</span>`:''}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.datesNote}">${_mchk(e.datesOk)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.activeNote}">${e.activeOk===true?'<span style="color:var(--ok)">active</span>':e.activeOk===false?'<span style="color:var(--err)">expired</span>':'<span style="color:var(--line)">n/a</span>'}</td>
-      <td style="vertical-align:top;padding:.45rem 0;font-size:.76rem;color:${e.findings&&e.findings.length?'var(--err)':'var(--muted)'}">${e.findings&&e.findings.length?e.findings.map(f=>'• '+clamp(f,140)).join('<br>'):'—'}</td></tr>`;
+      <td style="padding:.5rem 8px .5rem 0;vertical-align:top;white-space:nowrap">${statPill(e.status)}</td>
+      <td style="padding:.5rem 8px .5rem 0;vertical-align:top;white-space:nowrap">${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}<b>${e.element}</b>${n>1?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
+      <td style="vertical-align:top;padding-top:.5rem;text-align:center" title="${e.requiredWhy}">${e.required?'Yes':'<span style="color:var(--muted)">No</span>'}</td>
+      <td style="vertical-align:top;padding-top:.5rem;font-size:.78rem">${pres}</td>
+      <td style="vertical-align:top;padding-top:.5rem;font-size:.8rem" title="${e.verifiedNote||''}">${ver}</td>
+      <td style="vertical-align:top;padding-top:.5rem;font-size:.78rem" title="${[e.sourceNote,e.valueNote,e.datesNote,e.activeNote].filter(x=>x&&x!=='—').join(' · ')}">${checks}</td>
+      <td style="vertical-align:top;padding:.5rem 0;font-size:.76rem;color:${e.findings&&e.findings.length?'var(--err)':'var(--muted)'}">${e.findings&&e.findings.length?e.findings.map(f=>'• '+clamp(f,140)).join('<br>'):'—'}</td></tr>`;
       const docsBlk=du.length?`<div style="font-size:.68rem;text-transform:uppercase;color:var(--muted);margin:.1rem 0 .2rem">Documents reviewed (Platform) — ${e.docBasis||''}</div><table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.66rem;text-transform:uppercase;text-align:left"><th>Document</th><th>Verified</th><th>By</th><th>Status</th><th>State</th><th></th></tr>${du.map(docRow).join('')}</table>`:'';
       const itemsBlk=n?`<div style="font-size:.68rem;text-transform:uppercase;color:var(--muted);margin:.5rem 0 .2rem">Extracted &amp; verified per entry</div><table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.66rem;text-transform:uppercase;text-align:left"><th>Entry</th><th>Verified</th><th>Source</th><th>Active</th><th>Value</th><th>Dates</th></tr>${its.map(itemRow).join('')}</table>`:'';
-      const detail=exp?`<tr id="mi${i}" style="display:none;background:var(--field)"><td colspan="10" style="padding:.4rem .6rem .5rem 20px">${docsBlk}${itemsBlk}</td></tr>`:'';
+      const detail=exp?`<tr id="mi${i}" style="display:none;background:var(--field)"><td colspan="7" style="padding:.4rem .6rem .5rem 20px">${docsBlk}${itemsBlk}</td></tr>`:'';
       return head+detail;}).join('');
     const cell=(v,cnt)=>cnt===null?'<span style="color:var(--line)">n/a</span>':`<div style="font-size:.8rem">${v||'—'}</div>`;
     const three=(r.threeWay||[]).map(e=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.4rem 6px 0 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${e.element}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.platform,e.platformCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.docs,e.docCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.caqh,e.caqhCount)}</td></tr>`).join('');
@@ -514,7 +522,7 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 2px">
         <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">Element verification matrix</span>
         <button class="btn btn-ghost" style="padding:.25rem .6rem;font-size:.74rem" onclick="exportMatrix('${npi}')">${ic('download',12)} Export to sheet</button></div>
-      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.7rem;text-transform:uppercase"><th style="text-align:left">Element</th><th>Required?</th><th>In CAQH?</th><th>Verified?</th><th>Source?</th><th>Value?</th><th>Docs?</th><th>Dates?</th><th>Active?</th><th style="text-align:left">Findings</th></tr>${mrx}</table>
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.7rem;text-transform:uppercase;text-align:left"><th>Status</th><th>Element</th><th style="text-align:center">Required</th><th>Present in</th><th>Verified</th><th>Checks</th><th>Findings</th></tr>${mrx}</table>
       <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 2px">Element level — Platform vs Supporting docs vs CAQH</div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Platform</th><th>Supporting docs</th><th>CAQH app</th></tr>${three}</table>
       <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 2px">Supporting documents — packet vs Platform</div>
@@ -602,7 +610,7 @@ function exportMatrix(npi){const r=CAQHCACHE[npi];if(!r||!r.matrix){alert('Open 
     e.docRequired?(e.docPresent?'Present':'Missing'):(e.docPresent===null?'n/a':(e.docPresent?'Present':'-')),
     yn(e.datesOk),e.activeOk===true?'Active':e.activeOk===false?'Expired':'n/a',
     (e.findings||[]).map(f=>'- '+f).join(' \n'),
-    (e.docsUsed||[]).map(d=>`${d.name} (verified ${d.verifiedAt||'-'} by ${d.verifiedBy||'-'}, ${d.status||'-'})`).join(' \n')]);
+    (e.docsUsed||[]).map(d=>{const bits=[];if(d.verifiedAt)bits.push('verified '+d.verifiedAt);if(d.verifiedBy)bits.push('by '+d.verifiedBy);if(d.status)bits.push(d.status);return d.name+(bits.length?' ('+bits.join(', ')+')':'');}).join(' \n')]);
   _dlCsv(head,rows,`credcheck_matrix_${(r.provider||npi).replace(/\W+/g,'_')}_${_today()}.csv`);}
 function exportHistory(){window.open('/api/history.csv?org='+ORG,'_blank');}
 

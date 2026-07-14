@@ -902,6 +902,16 @@ def _findings_for(label, flags):
             out.append(f.get("message"))
     return out
 
+def _has_error_finding(label, flags):
+    kws = _ELEM_MATCH.get(label, ())
+    for f in flags or []:
+        if (f.get("severity") or "") != "error":
+            continue
+        hay = _fn(f.get("element")) + " " + _fn(f.get("rule")) + " " + _fn(f.get("category"))
+        if any(k in hay for k in kws):
+            return True
+    return False
+
 def _fn(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
@@ -990,6 +1000,10 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
         be_rows = master.get(be_key) or []
         be_rows = be_rows if isinstance(be_rows, list) else [be_rows]
         be_present = _count(master.get(be_key)) > 0
+        # work history is verified via application_verifications, not the workHistory element table
+        if not be_present and be_key == "workHistory":
+            be_present = any("work" in str(v.get("verification_type") or "").lower()
+                            for v in (master.get("appVerifications") or []))
         attested = bool(full.get(caqh_key)) if caqh_key else False
         req_type = be_key in required_set
         required = req_type or attested
@@ -997,7 +1011,6 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
         if req_type: why.append("required for provider type")
         if attested: why.append("attested in CAQH")
         required_why = " · ".join(why) if why else "not required"
-        expected_missing = required and not be_present
 
         # supporting document required / present (Platform attached-docs OR the packet PDF) + which
         # document(s) back it and why we call it verified (visibility)
@@ -1019,6 +1032,12 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
                 doc_basis = "no supporting document found"
         else:
             doc_required, doc_present, docs_used, doc_basis = False, None, [], "—"
+
+        # "Expected but missing" (hard error) ONLY when a required element is absent EVERYWHERE —
+        # not in platform, not attested on the application, and not present as a document. If it is
+        # in the application/packet but not the platform record, that's a review, not a hard error.
+        present_anywhere = be_present or attested or (doc_present is True)
+        expected_missing = required and not present_anywhere
 
         # ---- verify EVERY entry individually ----
         pkt_rows = (packet.get(pkt_key) or []) if pkt_key else []
@@ -1072,12 +1091,18 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
                       else "differs: " + ", ".join(it["label"] for it in items if it.get("datesOk") is False))
 
         findings = _findings_for(label, flags)
+        err_findings = any(f.get("severity") == "error" for f in (flags or [])
+                           if label in _finding_labels_for(f))
         if expected_missing:
-            status = "error"
+            status = "error"          # required element absent everywhere
         elif active_ok is False:
             status = "error"          # an expired required credential is critical
-        elif (doc_required and not doc_present) or dates_ok is False or value_ok is False \
-                or source_ok is False or verified is False or findings:
+        elif err_findings:
+            status = "error"          # a real error-severity finding on this element
+        elif required and not be_present:
+            status = "review"         # in application/packet but not in the platform record
+        elif (doc_required and not doc_present and verified is not True) or dates_ok is False \
+                or value_ok is False or source_ok is False or verified is False or findings:
             status = "review"
         elif not required and not be_present:
             status = "na"

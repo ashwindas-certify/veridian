@@ -32,3 +32,11 @@ venv/
 _chk.js
 
 url.txt
+
+# scratch / non-app data (not part of Veridian)
+packets_missing/
+missing_workflows.json
+delivered_names.txt
+gap_diff.py
+gap_investigate.py
+download_missing.py
