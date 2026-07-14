@@ -185,6 +185,18 @@ def check_malpractice(record, packet):
                 "Malpractice coverage disagrees between packet COI and platform: "
                 + "; ".join(diffs) + ".",
             ))
+
+    # NCQA: the COI must show the provider is covered. Flag if a named insured is present and does
+    # not match the applicant (may be group/entity coverage -> warning to verify, not a hard error).
+    applicant = _backend_name(record)
+    insured = [m.get("insured_name") for m in packet_mp if m.get("insured_name")]
+    if applicant and insured and not any(names_match(applicant, n) for n in insured):
+        flags.append(_flag(
+            record, packet, "malpractice", None,
+            "PACKET_MALPRACTICE_NAME_NOT_MATCHED", "medium", 0.65,
+            f"Malpractice COI names '{insured[0]}', which does not match the applicant "
+            f"'{applicant}' — confirm the provider is covered individually or under this group.",
+            category="Malpractice Insurance"))
     return flags
 
 def check_board_certs(record, packet):

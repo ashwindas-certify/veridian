@@ -33,7 +33,7 @@ Extract ONLY what is actually present in the document, as JSON with this shape:
    {"start_date","end_date","explanation"}
  ],
  "disclosure_answers": [
-   {"question","answer","unfavorable"}
+   {"question","answer","unfavorable","explanation"}
  ]
 }
 Rules:
@@ -50,6 +50,8 @@ Rules:
     adverse/"yes" answer to an adverse-history question (malpractice, license action,
     criminal, sanction, exclusion, impairment, etc.). A benign/"no" answer is
     unfavorable=false.
+  * explanation: any explanation / detail the provider gave to support a "yes" answer
+    (dates, description, resolution, comments). "" if the provider gave no explanation.
   Only include disclosure questions actually present in the CAQH application.
 - Dates as YYYY-MM (month and year is sufficient per NCQA); use YYYY-MM-DD only if a full date is shown.
 - Do not invent values. If the CAQH work history is not present, return empty lists."""
@@ -181,6 +183,27 @@ def _says_no_gap(explanation):
     """Platform work-history verdict asserts there is NO employment gap."""
     e = (explanation or "").lower()
     return "no" in e and "gap" in e
+
+
+_DISCLOSURE_MAP = [
+    (("malpractice", "claim", "settlement", "judgment", "liability", "payment"), ["npdb", "malpractice"], "malpractice/NPDB"),
+    (("licens", "board action", "disciplin", "limitation", "revok", "suspend", "restrict"), ["licensureActions"], "licensure-action"),
+    (("sanction", "exclusion", "medicare", "medicaid", "opt out", "opt-out", "debar", "preclusion"), ["sanctions", "npdb"], "sanctions"),
+    (("privilege", "hospital", "staff"), ["hospitalAffiliation"], "hospital-affiliation"),
+]
+
+def _disclosure_supported(d, master_record):
+    """(A)/(B) logic for an unfavorable disclosure. Supported if the provider gave an explanation,
+    OR platform data has a matching record for that category. Returns (supported, note)."""
+    if (d.get("explanation") or "").strip():
+        return True, "explanation provided on the application"
+    q = (d.get("question") or "").lower()
+    for kws, elems, label in _DISCLOSURE_MAP:
+        if any(k in q for k in kws):
+            if any(master_record.get(e) for e in elems):
+                return True, f"matching {label} record found in platform"
+            return False, f"no explanation and no matching {label} record in platform"
+    return False, "no explanation or supporting documentation on file"
 
 
 def _says_favourable(explanation):
@@ -328,16 +351,23 @@ def caqh_audit(master_record, pdf_path, packet=None, gap_days_by_state=None):
             f"{len(unfavorable)} unfavorable disclosure answer(s): {qs}.",
         ))
 
-    # 5) AI found an unfavorable disclosure answer regardless of platform; surface
-    #    for review, unless already covered by the mismatch above.
-    if unfavorable and not disclosure_mismatch:
-        qs = "; ".join(str(d.get("question")) for d in unfavorable)
-        flags.append(_flag(
-            master_record, packet,
-            "DISCLOSURE_UNFAVORABLE_FOUND", "warning", 0.65,
-            f"CAQH application has {len(unfavorable)} unfavorable disclosure "
-            f"answer(s) that should be reviewed: {qs}.",
-        ))
+    # 5) Per unfavorable disclosure: flag ONLY when (A) there is no explanation AND no supporting
+    #    platform record, or (B) it contradicts platform data. A disclosure that is explained OR
+    #    backed by a matching platform record is OK (info), not a flag.
+    for d in unfavorable:
+        if disclosure_mismatch:
+            break  # already flagged as a verdict contradiction above
+        ok, note = _disclosure_supported(d, master_record)
+        q = str(d.get("question") or "disclosure")
+        if ok:
+            flags.append(_flag(
+                master_record, packet, "DISCLOSURE_SUPPORTED", "info", 0.75,
+                f"Disclosure '{q}' answered yes — supported ({note})."))
+        else:
+            flags.append(_flag(
+                master_record, packet, "DISCLOSURE_UNSUPPORTED", "error", 0.7,
+                f"Disclosure '{q}' answered yes but {note} — a supporting explanation or matching "
+                f"platform record is required."))
 
     # 6) Info summary so reviewers can see the check ran.
     flags.append(_flag(
@@ -370,7 +400,7 @@ Extract ONLY what is actually present, as JSON with EXACTLY this shape:
  "work_history": [{"employer","role","start_date","end_date","is_current"}],
  "hospital_affiliations": [{"name","status"}],
  "malpractice_insurance": [{"carrier","policy_number","per_occurrence","aggregate","effective_date","expiration_date"}],
- "disclosure_answers": [{"question","answer","unfavorable"}],
+ "disclosure_answers": [{"question","answer","unfavorable","explanation"}],
  "supporting_documents": [{"name","present"}]
 }
 Rules:
@@ -385,7 +415,9 @@ Rules:
 - board_certifications.status: e.g. "Certified", "Board Eligible", "Not Certified".
 - education_training.type: e.g. "Medical School", "Residency", "Fellowship", "Internship".
 - disclosure_answers: every attestation/disclosure question the CAQH application asks;
-  answer is "yes"/"no"; unfavorable=true when a "yes" indicates a potential issue.
+  answer is "yes"/"no"; unfavorable=true when a "yes" indicates a potential issue;
+  explanation = any detail/explanation the provider gave to support a "yes" (dates, description,
+  resolution), "" if none provided.
 - supporting_documents: for each document/attachment the packet is expected to include
   (e.g. state license, DEA certificate, malpractice face sheet / COI, board certificate,
   diploma, W-9, CV), set present=true if a copy actually appears in the packet, else false.
@@ -467,14 +499,21 @@ def _summarize(val, keys):
 # Supporting-document categories -> keywords. We reconcile by CATEGORY (not exact label)
 # so packet/BQ label differences don't produce false mismatches.
 _DOC_CATS = [
-    ("State License",        ["license", "licensure"]),
+    ("State License",        ["state license", "license verification", "medical license", "license report",
+                              "licensure verification", "pharmacy license", "nursing license", "rn license"]),
     ("DEA / CDS",            ["dea", "cds", "controlled substance"]),
-    ("Malpractice / COI",    ["malpractice", "coi", "liability", "face sheet", "certificate of insurance", "insurance"]),
-    ("Board Certification",  ["board", "abms", "aoa", "certification cert", "board cert"]),
-    ("Diploma / Education",  ["diploma", "degree", "medical school", "residency", "fellowship", "ecfmg", "transcript"]),
+    ("Malpractice / COI",    ["malpractice", "coi", "professional liability", "face sheet", "certificate of insurance"]),
+    ("Board Certification",  ["board certif", "board cert", "abms", "aoa cert", "certification certificate", "specialty board"]),
+    ("Diploma / Education",  ["diploma", "degree", "medical school", "residency", "fellowship", "transcript", "graduation"]),
+    ("Education Proxy",      ["ama profile", "physician profile", "ecfmg", "aoa profile", "aoia", "education proxy", "aamc"]),
+    ("Licensure Action",     ["licensure action", "board action", "disciplinary", "consent order", "reprimand",
+                              "complaint", "adverse action", "stipulation"]),
+    ("Sanctions Screening",  ["sanction", "oig", "sam.gov", "exclusion", "opt out", "opt-out", "medicare opt", "leie", "preclusion"]),
+    ("NPDB Report",          ["npdb", "national practitioner data bank", "data bank report"]),
+    ("Hospital Affiliation", ["hospital", "privilege", "clinical privilege", "affiliation letter", "medical staff"]),
     ("CV / Resume",          ["cv", "curriculum vitae", "resume"]),
-    ("W-9 / Tax",            ["w-9", "w9", "tax"]),
-    ("Attestation / Release", ["attestation", "release", "authorization", "consent"]),
+    ("W-9 / Tax",            ["w-9", "w9", "tax id", "irs"]),
+    ("Attestation / Release", ["attestation", "release of information", "authorization", "consent to"]),
 ]
 
 
@@ -482,6 +521,29 @@ def _doc_cats(text):
     """Return the set of document categories a piece of label text matches."""
     t = (text or "").lower()
     return {label for label, kws in _DOC_CATS if any(k in t for k in kws)}
+
+
+def element_documents(master):
+    """The actual Platform supporting-document rows behind each category, for VISIBILITY: which
+    document backs an element, its verified date/verifier/status, and a link. Keyed by category."""
+    out = {}
+    for row in (master or {}).get("supportingDocuments") or []:
+        txt = " ".join(str(row.get(k) or "") for k in (
+            "document_name", "sub_collection_name", "original_file_name", "description",
+            "file_type", "state_id_name", "document_status_name"))
+        cats = _doc_cats(txt)
+        if not cats:
+            continue
+        info = {"name": (row.get("document_name") or row.get("original_file_name")
+                         or row.get("sub_collection_name") or "document"),
+                "url": row.get("file_url") or "",
+                "verifiedAt": _date10(row.get("verified_at")),
+                "verifiedBy": row.get("verified_by") or "",
+                "status": row.get("document_status_name") or "",
+                "state": row.get("state") or row.get("state_id_name") or ""}
+        for c in cats:
+            out.setdefault(c, []).append(info)
+    return out
 
 
 # Element data actually read from the packet PDF implies that document is present.
@@ -644,16 +706,24 @@ def _assert_flag(master, element, state, rule, severity, conf, message, category
             "flagClass": "application-asserts-vs-backend"}
 
 
-def assertion_flags(master, full):
+def assertion_flags(master, full, required=None):
     """Where the CAQH application ASSERTS an element (or a state to be credentialed in) that the
-    platform/platform does NOT have -> flag. This is the other half of branching applicability:
-    if the provider attests to it and it's missing in platform data, we flag it."""
+    platform does NOT have. We ONLY flag it as an error/warning when that element is REQUIRED by the
+    client's guidelines (``required`` = set of backend element keys). If the client's guidelines do
+    not require the element, we surface it as INFO (visible, not an error)."""
     master = master or {}
     full = full or {}
     flags = []
+    req = None if required is None else set(required)
     empty = lambda k: not (master.get(k))
 
-    # state licenses the provider lists on CAQH but that platform data lacks — ONLY flag states the
+    def gated(be_key, want_sev):
+        # required set unknown -> keep intended severity; known -> error/warning only if required
+        if req is None or be_key in req:
+            return want_sev, ""
+        return "info", " (not required by this client's guidelines — informational)"
+
+    # state licenses the provider lists on CAQH but that platform data lacks — ONLY for states the
     # provider is actually being credentialed in (assignedStates). A CAQH license for some other
     # state the client doesn't credential is not an error.
     demo = master.get("demographics") or {}
@@ -662,34 +732,39 @@ def assertion_flags(master, full):
     for l in full.get("state_licenses") or []:
         st = (l.get("state") or "").strip().upper()
         if st and st not in be_states and (not assigned or st in assigned):
+            sev, note = gated("stateLicenses", "error")
             flags.append(_assert_flag(
-                master, "stateLicenses", st, "APP_ASSERTS_LICENSE_MISSING_IN_PLATFORM", "error", 0.8,
+                master, "stateLicenses", st, "APP_ASSERTS_LICENSE_MISSING_IN_PLATFORM", sev, 0.8,
                 f"Provider's CAQH application lists a {st} license ({l.get('number', '')}) "
-                f"not found in platform data.", "State Licenses"))
+                f"not found in platform data.{note}", "State Licenses"))
 
     if _is_board_certified(full.get("board_certifications")) and empty("boardCertifications"):
+        sev, note = gated("boardCertifications", "error")
         flags.append(_assert_flag(
-            master, "boardCertifications", None, "APP_ASSERTS_BOARDCERT_MISSING_IN_PLATFORM", "error", 0.75,
-            "Provider's CAQH application reports a board certification not found in platform data.",
+            master, "boardCertifications", None, "APP_ASSERTS_BOARDCERT_MISSING_IN_PLATFORM", sev, 0.75,
+            f"Provider's CAQH application reports a board certification not found in platform data.{note}",
             "Board Certifications"))
 
     prof = full.get("professional_ids") or []
     if (full.get("dea") or any("dea" in str(p.get("type", "")).lower() for p in prof)) and empty("dea"):
+        sev, note = gated("dea", "error")
         flags.append(_assert_flag(
-            master, "dea", None, "APP_ASSERTS_DEA_MISSING_IN_PLATFORM", "error", 0.75,
-            "Provider's CAQH application reports a DEA registration not found in platform data.",
+            master, "dea", None, "APP_ASSERTS_DEA_MISSING_IN_PLATFORM", sev, 0.75,
+            f"Provider's CAQH application reports a DEA registration not found in platform data.{note}",
             "DEA / CDS"))
 
     if full.get("hospital_affiliations") and empty("hospitalAffiliation"):
+        sev, note = gated("hospitalAffiliation", "warning")
         flags.append(_assert_flag(
-            master, "hospitalAffiliation", None, "APP_ASSERTS_AFFILIATION_MISSING_IN_PLATFORM", "warning", 0.65,
-            "Provider's CAQH application lists hospital affiliation(s) not found in platform data.",
+            master, "hospitalAffiliation", None, "APP_ASSERTS_AFFILIATION_MISSING_IN_PLATFORM", sev, 0.65,
+            f"Provider's CAQH application lists hospital affiliation(s) not found in platform data.{note}",
             "Hospital Affiliations"))
 
     if full.get("malpractice_insurance") and empty("malpractice"):
+        sev, note = gated("malpractice", "error")
         flags.append(_assert_flag(
-            master, "malpractice", None, "APP_ASSERTS_MALPRACTICE_MISSING_IN_PLATFORM", "error", 0.75,
-            "Provider's CAQH application reports malpractice insurance not found in platform data.",
+            master, "malpractice", None, "APP_ASSERTS_MALPRACTICE_MISSING_IN_PLATFORM", sev, 0.75,
+            f"Provider's CAQH application reports malpractice insurance not found in platform data.{note}",
             "Malpractice Insurance"))
     return flags
 
@@ -749,13 +824,13 @@ _MATRIX_ELEMENTS = [
     ("State Licenses", "stateLicenses", "state_licenses", "state_licenses", "State License"),
     ("DEA / CDS", "dea", "dea", "dea", "DEA / CDS"),
     ("Board Certifications", "boardCertifications", "board_certifications", "board_certifications", "Board Certification"),
-    ("NPDB", "npdb", None, None, None),
-    ("Licensure Actions", "licensureActions", None, None, None),
-    ("Sanctions", "sanctions", None, None, None),
+    ("NPDB", "npdb", None, None, "NPDB Report"),
+    ("Licensure Actions", "licensureActions", None, None, "Licensure Action"),
+    ("Sanctions", "sanctions", None, None, "Sanctions Screening"),
     ("Malpractice Insurance", "malpractice", "malpractice_insurance", "malpractice", "Malpractice / COI"),
     ("Application Verifications", "appVerifications", None, None, None),
     ("Education & Training", "educationTraining", "education_training", None, "Diploma / Education"),
-    ("Hospital Affiliations", "hospitalAffiliation", "hospital_affiliations", None, None),
+    ("Hospital Affiliations", "hospitalAffiliation", "hospital_affiliations", None, "Hospital Affiliation"),
     ("Supporting Documents", "__docs__", None, None, None),
 ]
 _DATE_FIELDS = ("issue_date", "effective_date", "expiration_date", "report_date",
@@ -844,10 +919,12 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
     master = master or {}; packet = packet or {}; full = full or {}
     required_set = set(required_set or [])
     bq_doc_cats, pkt_doc_cats = doc_category_sets(master, packet, full)  # robust doc presence
+    edocs = element_documents(master)                                    # backing docs for visibility
     out = []
     ASOF = datetime.now()
     _blank = {"verified": None, "verifiedNote": "—", "sourceOk": None, "sourceNote": "—",
-              "activeOk": None, "activeNote": "—", "valueOk": None, "valueNote": "—", "items": []}
+              "activeOk": None, "activeNote": "—", "valueOk": None, "valueNote": "—", "items": [],
+              "docsUsed": [], "docBasis": "—"}
     for label, be_key, caqh_key, pkt_key, doc_cat in _MATRIX_ELEMENTS:
         if be_key == "__attestation__":     # workflow attestation date, platform vs CAQH
             demo = master.get("demographics") or {}
@@ -891,12 +968,26 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
         required_why = " · ".join(why) if why else "not required"
         expected_missing = required and not be_present
 
-        # supporting document required / present (Platform attached-docs OR the packet PDF)
+        # supporting document required / present (Platform attached-docs OR the packet PDF) + which
+        # document(s) back it and why we call it verified (visibility)
         if doc_cat:
+            accepted = {doc_cat}
+            if be_key == "educationTraining":
+                accepted.add("Education Proxy")   # AMA/ECFMG proxy is acceptable education support
             doc_required = required
-            doc_present = (doc_cat in bq_doc_cats) or (doc_cat in pkt_doc_cats)
+            doc_present = any((a in bq_doc_cats) or (a in pkt_doc_cats) for a in accepted)
+            docs_used = [d for a in accepted for d in edocs.get(a, [])]
+            verified_docs = [d for d in docs_used if d.get("verifiedAt")]
+            if docs_used:
+                d0 = verified_docs[0] if verified_docs else docs_used[0]
+                doc_basis = (f"verified {d0['verifiedAt']} — {d0['name']}" if d0.get("verifiedAt")
+                             else f"on file — {d0['name']}")
+            elif doc_present:
+                doc_basis = "copy present in the PSV packet"
+            else:
+                doc_basis = "no supporting document found"
         else:
-            doc_required, doc_present = False, None
+            doc_required, doc_present, docs_used, doc_basis = False, None, [], "—"
 
         # ---- verify EVERY entry individually ----
         pkt_rows = (packet.get(pkt_key) or []) if pkt_key else []
@@ -969,6 +1060,7 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
                     "activeOk": active_ok, "activeNote": active_note,
                     "valueOk": value_ok, "valueNote": value_note,
                     "docRequired": doc_required, "docPresent": doc_present,
+                    "docsUsed": docs_used, "docBasis": doc_basis,
                     "datesNote": dates_note, "datesOk": dates_ok,
                     "findings": findings, "items": items, "status": status})
     return out

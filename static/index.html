@@ -109,7 +109,9 @@
       <button class="btn" id="runSelBtn" onclick="runSelected()" style="margin-left:auto">Run full audit</button>
       <button class="btn btn-ghost" onclick="runSelected('education')" title="Education &amp; Training only — one targeted read per file, much faster">Run E&amp;T only</button>
       <button class="btn btn-ghost" onclick="runFiltered()">Run all filtered</button>
-      <button class="btn btn-ghost" id="expBtn" onclick="exportAuditCsv()" style="display:none"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Export</button>
+      <span id="expBtn" style="display:none;gap:6px;align-items:center">
+        <button class="btn btn-ghost" onclick="exportAuditCsv()" title="One row per finding — full detail"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Findings CSV</button>
+        <button class="btn btn-ghost" onclick="exportSummaryCsv()" title="One row per provider — counts &amp; top issue">Summary CSV</button></span>
     </div>
     <div id="loading" class="card p-4 mb-3 hidden">
       <div class="flex items-center gap-3"><span class="spin"></span><span style="font-weight:600" id="loadingMsg">Auditing…</span></div>
@@ -289,7 +291,7 @@ async function runAuditSet(npis,scope){if(!npis.length)return;scope=scope||'full
       if(j&&j.status!=='running'){clearInterval(iv);pollJobs();rz(await (await fetch('/api/job-result/'+jid)).json());}}catch(e){}},1500);});
     if(res.error){$('flags').innerHTML='<div class="card p-4" style="color:var(--err)">Error: '+res.error+'</div>';return;}
     LAST=res;(res.summary||[]).forEach(x=>LASTMAP[x.workflowId]=x);
-    $('expBtn').style.display='';renderRecords();renderRunFlags(res);
+    $('expBtn').style.display='inline-flex';renderRecords();renderRunFlags(res);
   }catch(e){$('flags').innerHTML='<div class="card p-4">Error: '+e+'</div>';}
   finally{$('loading').classList.add('hidden');stopFacts();}}
 function renderRunFlags(res){const byWf={};(res.flags||[]).forEach(f=>(byWf[f.workflowId]=byWf[f.workflowId]||[]).push(f));
@@ -407,9 +409,14 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
       <td style="vertical-align:top;padding:.5rem 0;font-size:.82rem">${detail}</td></tr>`;}).join('');
   const pflags=(LAST.flags||[]).filter(f=>f.workflowId===wid);
   const bySev={error:[],warning:[],info:[]};pflags.forEach(f=>(bySev[f.severity]||bySev.info).push(f));
-  const errGrp=(sev,color,lbl)=>bySev[sev].length?`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:${color};margin:12px 0 4px">${lbl} (${bySev[sev].length})</div>`+bySev[sev].map(f=>`<div style="border-bottom:1px solid var(--line);padding:.45rem 0;font-size:.83rem"><b style="text-transform:capitalize">${f.element||'—'}</b>${f.state?' · '+f.state:''} — ${clamp(f.message,200)}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${clamp(f.expected,160)}</div>`:''}</div>`).join(''):'';
+  const critRank={critical:0,high:1,medium:2};
+  const critBadge=c=>{const col=c==='critical'?'var(--err)':c==='high'?'#d9730d':'var(--warn)';return c?`<span style="font-size:.62rem;font-weight:700;text-transform:uppercase;color:#fff;background:${col};border-radius:4px;padding:1px 5px;margin-right:6px">${c}</span>`:'';};
+  const fline=f=>`<div style="border-bottom:1px solid var(--line);padding:.45rem 0;font-size:.83rem">${f.severity==='error'?critBadge(f.criticality||'medium'):''}<b style="text-transform:capitalize">${f.element||'—'}</b>${f.state?' · '+f.state:''} — ${clamp(f.message,200)}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${clamp(f.expected,160)}</div>`:''}</div>`;
+  const errGrp=(sev,color,lbl)=>{if(!bySev[sev].length)return'';const items=sev==='error'?[...bySev[sev]].sort((a,b)=>(critRank[a.criticality||'medium'])-(critRank[b.criticality||'medium'])):bySev[sev];return `<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:${color};margin:12px 0 4px">${lbl} (${bySev[sev].length})</div>`+items.map(fline).join('');};
   const errBody=pflags.length?(errGrp('error','var(--err)','Errors')+errGrp('warning','var(--warn)','Warnings')+errGrp('info','var(--muted)','Info')):'<div style="color:var(--ok);padding:1rem 0">✓ No findings — this provider passed all active checks.</div>';
   const nerr=bySev.error.length,nwarn=bySev.warning.length;
+  const nc={critical:0,high:0,medium:0};bySev.error.forEach(f=>nc[f.criticality||'medium']++);
+  const critLine=nerr?` · <span style="color:var(--err)">${nc.critical} critical</span> · ${nc.high} high · ${nc.medium} medium`:'';
   $('detailBody').innerHTML=`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="font-weight:700;font-size:1.1rem">${p.provider||wid}</div>
       <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.78rem" onclick="openPacket('${wid}',this)">${ic('download',13)} PSV packet</button>
       <a class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.78rem;text-decoration:none" href="https://ng.certifyos.com/credentialing/${wid}?organizationId=${ORG}" target="_blank" rel="noopener">${ic('external',13)} Open in platform</a></div>
@@ -422,7 +429,7 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
       <button class="dtab" data-t="caqh" onclick="detailTab('caqh','${p.npi}')">CAQH insight (AI)</button></div>
     <div id="dpane-matrix" class="dpane"><div id="matrixBox"></div></div>
     <div id="dpane-errors" class="dpane" style="display:none">
-      <div style="font-size:.82rem;color:var(--muted);margin-bottom:2px">${pflags.length} finding(s) — ${nerr} error, ${nwarn} warning, ${bySev.info.length} info</div>${errBody}</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:2px">${pflags.length} finding(s) — ${nerr} error, ${nwarn} warning, ${bySev.info.length} info${critLine}</div>${errBody}</div>
     <div id="dpane-elem" class="dpane" style="display:none">
       <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:0 0 8px">Platform vs application — element checks</div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Status</th><th>Finding</th></tr>${rows}</table></div>
@@ -471,7 +478,8 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <td style="text-align:center">${it.active===true?'<span style="color:var(--ok)">active</span>':it.active===false?'<span style="color:var(--err)">expired</span>':'—'}${it.expiration?' <span style="color:var(--muted)">'+it.expiration+'</span>':''}</td>
       <td style="text-align:center">${itcell(it.valueOk)}</td>
       <td style="text-align:center">${itcell(it.datesOk)}</td></tr>`;
-    const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const exp=n>1;
+    const docRow=d=>`<tr style="font-size:.75rem"><td style="padding:.2rem 0">${d.name||'document'}</td><td style="text-align:center">${d.verifiedAt?'<span style="color:var(--ok)">✓ '+d.verifiedAt+'</span>':'<span style="color:var(--warn)">not verified</span>'}</td><td style="color:var(--muted)">${d.verifiedBy||'—'}</td><td>${d.status||'—'}</td><td>${d.state||''}</td><td>${d.url?`<a href="${d.url}" target="_blank" rel="noopener" style="color:var(--teal-d)">open</a>`:'—'}</td></tr>`;
+    const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const du=e.docsUsed||[];const exp=n>1||du.length>0;
       const head=`<tr style="border-bottom:1px solid var(--line)">
       <td style="padding:.45rem 6px .45rem 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}${e.element}${n?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.requiredWhy}">${e.required?'<span style="color:var(--ink)">Yes</span>':'<span style="color:var(--muted)">No</span>'}</td>
@@ -479,12 +487,13 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.verifiedNote}">${e.expectedButMissing?'<span style="color:var(--err);font-weight:700">MISSING</span>':_mchk(e.verified)}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.sourceNote}">${_mchk(e.sourceOk)}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.valueNote}">${_mchk(e.valueOk)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center">${e.docRequired?_mchk(e.docPresent,'','missing'):(e.docPresent===null?'<span style="color:var(--line)">n/a</span>':(e.docPresent?'<span style="color:var(--ok)">✓</span>':'—'))}</td>
+      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.docBasis||''}">${e.docRequired?_mchk(e.docPresent,'','missing'):(e.docPresent===null?'<span style="color:var(--line)">n/a</span>':(e.docPresent?'<span style="color:var(--ok)">✓</span>':'—'))}${du.length?` <span style="color:var(--muted);font-size:.68rem">(${du.length})</span>`:''}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.datesNote}">${_mchk(e.datesOk)}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.activeNote}">${e.activeOk===true?'<span style="color:var(--ok)">active</span>':e.activeOk===false?'<span style="color:var(--err)">expired</span>':'<span style="color:var(--line)">n/a</span>'}</td>
       <td style="vertical-align:top;padding:.45rem 0;font-size:.76rem;color:${e.findings&&e.findings.length?'var(--err)':'var(--muted)'}">${e.findings&&e.findings.length?e.findings.map(f=>'• '+clamp(f,140)).join('<br>'):'—'}</td></tr>`;
-      const detail=exp?`<tr id="mi${i}" style="display:none;background:var(--field)"><td colspan="10" style="padding:.4rem .6rem .5rem 20px">
-        <table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.68rem;text-transform:uppercase;text-align:left"><th>Entry</th><th>Verified</th><th>Source</th><th>Active</th><th>Value</th><th>Dates</th></tr>${its.map(itemRow).join('')}</table></td></tr>`:'';
+      const docsBlk=du.length?`<div style="font-size:.68rem;text-transform:uppercase;color:var(--muted);margin:.1rem 0 .2rem">Documents reviewed (Platform) — ${e.docBasis||''}</div><table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.66rem;text-transform:uppercase;text-align:left"><th>Document</th><th>Verified</th><th>By</th><th>Status</th><th>State</th><th></th></tr>${du.map(docRow).join('')}</table>`:'';
+      const itemsBlk=n?`<div style="font-size:.68rem;text-transform:uppercase;color:var(--muted);margin:.5rem 0 .2rem">Extracted &amp; verified per entry</div><table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.66rem;text-transform:uppercase;text-align:left"><th>Entry</th><th>Verified</th><th>Source</th><th>Active</th><th>Value</th><th>Dates</th></tr>${its.map(itemRow).join('')}</table>`:'';
+      const detail=exp?`<tr id="mi${i}" style="display:none;background:var(--field)"><td colspan="10" style="padding:.4rem .6rem .5rem 20px">${docsBlk}${itemsBlk}</td></tr>`:'';
       return head+detail;}).join('');
     const cell=(v,cnt)=>cnt===null?'<span style="color:var(--line)">n/a</span>':`<div style="font-size:.8rem">${v||'—'}</div>`;
     const three=(r.threeWay||[]).map(e=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.4rem 6px 0 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${e.element}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.platform,e.platformCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.docs,e.docCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.caqh,e.caqhCount)}</td></tr>`).join('');
@@ -542,13 +551,33 @@ function renderResults(){
       <span style="color:var(--muted);opacity:.6">(${f.confidence})</span></div>
       ${f.expected?`<div style="color:var(--muted);font-size:.79rem;margin-left:16px">↳ <b style="color:var(--teal-d)">Guideline:</b> ${f.expected}</div>`:''}</div>`).join('')+`</div>`;}).join('');
 }
+function _dlCsv(head,rows,name){
+  const esc=v=>`"${(''+(v??'')).replace(/"/g,'""')}"`;
+  const csv='﻿'+[head].concat(rows).map(r=>r.map(esc).join(',')).join('\r\n');   // BOM = clean Excel open
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=name;a.click();}
+function _today(){return new Date().toISOString().slice(0,10);}
+function _plink(wid){return `https://ng.certifyos.com/credentialing/${wid}?organizationId=${ORG}`;}
+// Detailed export: one row per finding
 function exportAuditCsv(){if(!LAST)return;const sm={};LAST.summary.forEach(s=>sm[s.workflowId]=s);
-  const head=['provider','npi','type','states','analyst','status','severity','category','element','state','rule','confidence','found','guideline'];
-  const rows=LAST.flags.map(f=>{const s=sm[f.workflowId]||{};return [s.provider,s.npi,s.type,s.states,s.responsible,s.status,
-    f.severity,f.category||f.flagClass,f.element,f.state,f.rule,f.confidence,f.message,f.expected||''];});
-  const csv=[head].concat(rows).map(r=>r.map(v=>`"${(''+(v??'')).replace(/"/g,'""')}"`).join(',')).join('\n');
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  a.download=`credcheck_${(LAST.client||'audit').replace(/\W+/g,'_')}.csv`;a.click();}
+  const head=['Run date','Client','Provider','NPI','Provider type','States','Analyst','Provider status',
+    'Severity','Criticality','Category','Element','Element state','Finding','Guideline','Confidence','Source','Workflow ID','Platform link'];
+  const rank={error:0,warning:1,info:2},crank={critical:0,high:1,medium:2};
+  const flags=[...(LAST.flags||[])].sort((a,b)=>(rank[a.severity]-rank[b.severity])||((crank[a.criticality]??3)-(crank[b.criticality]??3)));
+  const rows=flags.map(f=>{const s=sm[f.workflowId]||{};return [_today(),LAST.client||'',s.provider,s.npi,s.type,s.states,s.responsible,s.status,
+    f.severity,f.criticality||'',f.category||f.flagClass,f.element,f.state,f.message,f.expected||'',f.confidence,f.flagClass,f.workflowId,_plink(f.workflowId)];});
+  _dlCsv(head,rows,`credcheck_findings_${(LAST.client||'audit').replace(/\W+/g,'_')}_${_today()}.csv`);}
+// Summary export: one row per provider
+function exportSummaryCsv(){if(!LAST)return;const by={};(LAST.flags||[]).forEach(f=>(by[f.workflowId]=by[f.workflowId]||[]).push(f));
+  const head=['Run date','Client','Provider','NPI','Provider type','States','Analyst','Status','Audit confidence',
+    'Total findings','Errors','Critical','High','Medium','Warnings','Info','Top issue','Workflow ID','Platform link'];
+  const rows=(LAST.summary||[]).map(s=>{const fl=by[s.workflowId]||[];
+    const errs=fl.filter(f=>f.severity==='error'),cc=c=>errs.filter(f=>(f.criticality||'medium')===c).length;
+    const top=[...errs].sort((a,b)=>({critical:0,high:1,medium:2}[a.criticality||'medium'])-({critical:0,high:1,medium:2}[b.criticality||'medium']))[0];
+    return [_today(),LAST.client||'',s.provider,s.npi,s.type,s.states,s.responsible,s.status,s.auditConfidence??'',
+      fl.length,errs.length,cc('critical'),cc('high'),cc('medium'),fl.filter(f=>f.severity==='warning').length,fl.filter(f=>f.severity==='info').length,
+      top?top.message:'',s.workflowId,_plink(s.workflowId)];});
+  _dlCsv(head,rows,`credcheck_summary_${(LAST.client||'audit').replace(/\W+/g,'_')}_${_today()}.csv`);}
 function exportHistory(){window.open('/api/history.csv?org='+ORG,'_blank');}
 
 async function loadDash(){$('dashBody').innerHTML='<div style="color:var(--muted)"><span class="spin"></span> Loading history…</div>';

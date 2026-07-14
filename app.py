@@ -112,7 +112,7 @@ from google import genai
 from google.genai import types
 from google.cloud import bigquery
 
-import reconcile, master_record, audit, packet_audit, caqh_audit, rules_engine_results, education_audit, packet_extract, combined_extract
+import reconcile, master_record, audit, packet_audit, caqh_audit, rules_engine_results, education_audit, packet_extract, combined_extract, ncqa_checks
 
 app = FastAPI(title="PSV Audit")
 CLIENTS = "clients"
@@ -162,6 +162,47 @@ def _persist_overlay(c, org):
     for oid in (c.get("orgIds") or [org]):
         _CFG_CACHE[oid] = o
     return ts
+
+_CRIT_CRITICAL = ("SANCTION", "ADVERSE", "NPDB_REPORT", "NPDB_MISMATCH", "EXCLUSION", "EXPIR",
+                  "MISSING_STATELICENSE", "MISSING_LICENSE", "MISSING_DEA", "MISSING_MALPRACTICE",
+                  "MISSING_NPDB", "NPI_MISMATCH", "NAME_MISMATCH", "ASSERTS_LICENSE", "ASSERTS_MALPRACTICE")
+_CRIT_HIGH = ("MISMATCH", "GAP_UNEXPLAINED", "ASSERTS", "NOT_COMPLETED", "COVERAGE", "HIERARCHY",
+              "MISSING_", "EXPECTED")
+
+def _criticality(f):
+    """For error flags only: how critical (critical / high / medium). Warnings/info get None."""
+    if f.get("severity") != "error":
+        return None
+    r = (f.get("rule") or "").upper(); m = (f.get("message") or "").upper()
+    if any(k in r or k in m for k in _CRIT_CRITICAL):
+        return "critical"
+    if any(k in r for k in _CRIT_HIGH):
+        return "high"
+    return "medium"
+
+def _apply_criticality(flags):
+    for f in flags:
+        c = _criticality(f)
+        if c: f["criticality"] = c
+    return flags
+
+# Redundant license status/expiry rules that describe the same "not active/current" problem.
+# Keep only the single most-informative one per (workflow, state). Priority: active-but-expired
+# (says both) > expired (concrete date) > status-not-active.
+_LIC_EXPIRY_PRI = {"STATE_LICENSE_ACTIVE_BUT_EXPIRED": 0, "STATE_LICENSE_NOT_EXPIRED": 1,
+                   "STATE_LICENSE_STATUS_ACTIVE": 2}
+
+def _collapse_license_flags(flags):
+    groups = {}
+    for f in flags:
+        if f.get("rule") in _LIC_EXPIRY_PRI:
+            groups.setdefault((f.get("workflowId"), (f.get("state") or "").upper()), []).append(f)
+    drop = set()
+    for fs in groups.values():
+        if len(fs) > 1:
+            for f in sorted(fs, key=lambda x: _LIC_EXPIRY_PRI[x["rule"]])[1:]:
+                drop.add(id(f))
+    return [f for f in flags if id(f) not in drop]
 
 def _gap_map(org):
     """Client's per-state work-history gap thresholds (days), or None for the NCQA default."""
@@ -360,10 +401,14 @@ def deep_packet_audit(wfs, master, jid=None):
                 for pf in packet_audit.packet_audit(m, path, packet=pkt):
                     pf["severity"] = _sevmap.get(pf.get("severity"), pf.get("severity"))
                     flags.append(pf)
+                flags += ncqa_checks.ncqa_checks(m, pkt)   # attestation recency, malpractice hx, sanctions, restrictions
             if full is not None:
                 flags += caqh_audit.caqh_audit(m, path, packet=full, gap_days_by_state=_gap_map(org))
                 appl_by_wf[wid] = caqh_audit.applicability(full)
-                flags += caqh_audit.assertion_flags(m, full)
+                _dem = m.get("demographics") or {}
+                _req = reconcile.required_for(_dem.get("providerType"), _dem.get("credentialingCycle"),
+                                              reconcile.parse_states(_dem.get("assignedStates") or _dem.get("states")))
+                flags += caqh_audit.assertion_flags(m, full, required=_req)
                 flags += caqh_audit.demographic_flags(m, full)
             if edu is not None:
                 flags += education_audit.education_audit(m, path, packet=edu)
@@ -554,6 +599,7 @@ def _education_only_run(org, npis, assignedTo, limit, jid=None):
                         "provider": f'{dem.get("firstName", "")} {dem.get("lastName", "")}'.strip() or m["workflowId"],
                         "wid": m["workflowId"], "sec": sec,
                         "errors": sum(1 for x in f if x.get("severity") == "error")})
+    _apply_criticality(flags)
     by = {}
     for x in flags: by.setdefault(x["workflowId"], []).append(x)
     summary = []
@@ -602,6 +648,8 @@ def do_audit(org, npis, assignedTo, limit, deep, jid=None, scope="full"):
         flags = [g for f in acc
                  for g in caqh_audit.suppress_by_applicability([f], appl_by_wf.get(f.get("workflowId")))]
     elif jid: JOBS[jid]["processed"] = len(wfs)
+    flags = _collapse_license_flags(flags)   # drop redundant license status/expiry duplicates
+    _apply_criticality(flags)
     by = {}
     for f in flags: by.setdefault(f["workflowId"], []).append(f)
     summary = []
@@ -721,11 +769,12 @@ def caqh_insight(org: str, npi: str):
             _EXTRACT_CACHE[(wid, "packet")] = pkt
         elementRows, docRows = caqh_audit.compare_caqh_elements(m, caqh, pkt)
         demoRows = caqh_audit.demographic_compare(m, caqh)
-        flags += caqh_audit.demographic_flags(m, caqh)
-        threeWay = caqh_audit.three_way_compare(m, pkt, caqh)
         dem = (m or {}).get("demographics") or {}
         required = reconcile.required_for(dem.get("providerType"), dem.get("credentialingCycle"),
                                           reconcile.parse_states(dem.get("assignedStates") or dem.get("states")))
+        flags += caqh_audit.assertion_flags(m, caqh, required=required)
+        flags += caqh_audit.demographic_flags(m, caqh)
+        threeWay = caqh_audit.three_way_compare(m, pkt, caqh)
         matrix = caqh_audit.element_matrix(m, pkt, caqh, required, docRows, flags)
     except Exception as e:
         return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
@@ -927,9 +976,13 @@ def ask(q: Ask):
 def job_export(jid: str):
     """Export a single request's (job's) findings as CSV."""
     rows = JOB_RESULTS.get(jid, [])
-    cols = ["run_ts","client","workflow_id","provider","npi","provider_type","state","responsible","severity","category","element","rule","confidence","message"]
-    buf = io.StringIO(); w = _csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore"); w.writeheader()
-    for r in rows: w.writerow({k: ("" if r.get(k) is None else str(r.get(k))) for k in cols})
+    cols = ["run_ts","client","provider","npi","provider_type","state","responsible","severity","category","element","rule","confidence","message","platform_link","workflow_id"]
+    buf = io.StringIO(); buf.write("﻿")  # BOM for clean Excel open
+    w = _csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore"); w.writeheader()
+    for r in rows:
+        wid = r.get("workflow_id"); o = r.get("org") or ""
+        r = {**r, "platform_link": (f"https://ng.certifyos.com/credentialing/{wid}?organizationId={o}" if wid else "")}
+        w.writerow({k: ("" if r.get(k) is None else str(r.get(k))) for k in cols})
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=veridian_{jid}.csv"})
 

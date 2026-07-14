@@ -17,7 +17,7 @@ Extract ONLY what is actually present in the document, as JSON with this shape:
  "state_licenses": [{"state","license_number","status","expiration_date","source","holder_name"}],
  "dea": [{"number","state","expiration_date","registrant_name"}],
  "board_certifications": [{"specialty","expiration_date"}],
- "malpractice": [{"carrier","policy_number","expiration_date","occurrence_amount","aggregate_amount"}],
+ "malpractice": [{"carrier","policy_number","expiration_date","occurrence_amount","aggregate_amount","insured_name"}],
  "npdb_report_present": boolean,
  "npdb": {"present": boolean, "subject_name": string, "npi": string, "date_of_birth": string, "report_count": number},
  "sanctions_screened": [ "OIG","SAM", ... ],
@@ -26,6 +26,8 @@ Extract ONLY what is actually present in the document, as JSON with this shape:
 Notes:
 - holder_name / registrant_name / subject_name are the person the license / DEA certificate / NPDB
   report is issued to, exactly as printed on that document (so a mismatch vs the applicant can be caught).
+- malpractice.insured_name is the NAMED INSURED on the certificate of insurance / COI (the person or
+  the group/entity the policy covers), exactly as printed.
 - npdb.report_count is the number of NPDB reports/disclosures on the report (0 if the report is clear).
 - documents_present: enumerate EVERY distinct supporting document actually INCLUDED in this packet.
   Use the PDF's BOOKMARKS / outline (the table-of-contents entries usually name each document) AND

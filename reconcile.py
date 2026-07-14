@@ -16,6 +16,16 @@ _gen = _os.path.join(_DIR, "generated_missing_rules.json")
 if _os.path.exists(_gen):
     try: CAT["rules"] += json.load(open(_gen))
     except Exception as _e: print("[warn] generated rules load:", _e)
+# de-duplicate by rule id (base catalog wins over generated) so no rule double-flags
+_seen_ids = set(); _deduped = []
+for _r in CAT["rules"]:
+    _rid = _r.get("id")
+    if _rid and _rid in _seen_ids:
+        continue
+    if _rid:
+        _seen_ids.add(_rid)
+    _deduped.append(_r)
+CAT["rules"] = _deduped
 ASOF = datetime.strptime(CAT["asof"], "%Y-%m-%d").date()
 # deep-copied so per-client overlays never mutate the pristine base (matters for the web server)
 _BASE_D = json.loads(json.dumps(CAT["clientDefaults"]))

@@ -145,7 +145,7 @@
     {"id": "NPDB_VERIFICATION_STALE", "element": "npdb", "check": "verified_within", "days_ref": "npdb_verified_within_days",
      "severity": "warning", "message": "NPDB last verified {verified_at} -- outside client recency window"},
     {"id": "SANCTIONS_VERIFICATION_STALE", "element": "sanctions", "check": "verified_within", "days_ref": "sanctions_verified_within_days",
-     "severity": "info", "message": "Sanction {sanction_type} last verified {verified_at} -- outside client recency window"},
+     "severity": "warning", "message": "Sanction {sanction_type} last verified {verified_at} -- outside client recency window"},
     {"id": "LICENSE_EXPIRING_SOON", "element": "stateLicenses", "check": "expiring_soon", "field": "expiration_date", "days_ref": "license_expiring_soon_days",
      "severity": "warning", "message": "License {state} {license_number} expires {value} -- within client outreach window"},
     {"id": "MALPRACTICE_COVERAGE_BELOW_CLIENT_MATRIX", "element": "malpractice", "check": "coverage_min_matrix",
