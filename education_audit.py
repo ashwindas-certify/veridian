@@ -10,7 +10,7 @@ physician profile pages) with Gemini on Vertex (same client pattern as
 packet_extract / caqh_audit) and emits education-training flags:
   * a non-board-certified MD/DO with no completed Psychiatry residency,
   * a residency present but still In Progress for such a provider,
-  * packet shows education but the backend has none verified,
+  * packet shows education but the platform has none verified,
   * an info summary so reviewers can see the check ran."""
 import argparse, json, os, sys
 
@@ -115,7 +115,7 @@ _LICENSE_SRC = ("licens", "state board", "state medical", "medical board", "oste
 
 
 def _et_sources(master_record):
-    """Every source label the backend used to verify this provider's education/training."""
+    """Every source label the platform used to verify this provider's education/training."""
     srcs = []
     for e in master_record.get("educationTraining") or []:
         if e.get("source"):
@@ -235,14 +235,14 @@ def education_audit(master_record, pdf_path, packet=None):
         if residencies and not any(_is_psychiatry(r) for r in residencies):
             pass  # message above already conveys specialty via _describe
 
-    # 3) Packet shows education but the backend has no verified education/training.
+    # 3) Packet shows education but the platform has no verified education/training.
     backend_edu = master_record.get("educationTraining") or []
     if education and not backend_edu:
         flags.append(_flag(
             master_record, packet,
             "EDU_NOT_VERIFIED_IN_BACKEND", "warning", 0.7,
             f"Packet shows {len(education)} education/training entry(ies) but the "
-            f"backend has no verified education/training on record.",
+            f"platform has no verified education/training on record.",
             "education/training must be verified from primary source",
         ))
 
@@ -268,7 +268,7 @@ def _load_records(path="master_records.json"):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Audit the Education & Training in a PSV packet against the backend record.")
+        description="Audit the Education & Training in a PSV packet against the platform record.")
     ap.add_argument("--workflow", required=True, help="workflowId to audit")
     ap.add_argument("--records", default="master_records.json", help="path to master_records.json")
     ap.add_argument("--packets-dir", default="packets", help="directory holding <workflowId>.pdf")

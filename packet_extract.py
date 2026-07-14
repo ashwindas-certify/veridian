@@ -21,12 +21,20 @@ Extract ONLY what is actually present in the document, as JSON with this shape:
  "npdb_report_present": boolean,
  "npdb": {"present": boolean, "subject_name": string, "npi": string, "date_of_birth": string, "report_count": number},
  "sanctions_screened": [ "OIG","SAM", ... ],
- "documents_present": [ short labels of each distinct document/section you see ]
+ "documents_present": [ {"label": string, "category": string} ]
 }
 Notes:
 - holder_name / registrant_name / subject_name are the person the license / DEA certificate / NPDB
   report is issued to, exactly as printed on that document (so a mismatch vs the applicant can be caught).
 - npdb.report_count is the number of NPDB reports/disclosures on the report (0 if the report is clear).
+- documents_present: enumerate EVERY distinct supporting document actually INCLUDED in this packet.
+  Use the PDF's BOOKMARKS / outline (the table-of-contents entries usually name each document) AND
+  the section divider / cover pages between documents to find them. A document counts only if an
+  actual copy is present in the packet — not if it is merely mentioned or listed.
+  * label: the document's name as shown in the bookmark / divider (verbatim).
+  * category: map it to ONE of exactly these buckets (or "Other"):
+    "State License", "DEA / CDS", "Board Certification", "Malpractice / COI", "Diploma / Education",
+    "NPDB Report", "Sanctions Screening", "CV / Resume", "W-9 / Tax", "Attestation / Release", "Other".
 Dates as YYYY-MM-DD when possible. Do not invent values."""
 
 def extract(pdf_path):

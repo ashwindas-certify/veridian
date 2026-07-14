@@ -319,15 +319,15 @@ async function pollJobs(){try{JOBSCACHE=await (await fetch('/api/jobs')).json()|
 function renderRunProgress(){const box=$('runProgress');if(!box)return;
   const j=(JOBSCACHE||[]).filter(x=>x.type==='audit'&&x.status==='running').sort((a,b)=>b.startedAt<a.startedAt?-1:1)[0];
   if(!j||$('loading').classList.contains('hidden')){box.innerHTML='';return;}
-  const done=(j.steps||[]).filter(s=>s.status==='done').length,tot=(j.steps||[]).length||1;
-  const pctFiles=j.total?Math.round((j.processed/j.total)*100):0;
-  const bar=(pct)=>`<div style="height:7px;background:var(--field);border-radius:999px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--teal-d,#0d9488);transition:width .4s"></div></div>`;
-  const icon=s=>s==='done'?`<span style="color:var(--ok)">${ic('check',14)}</span>`:s==='running'?'<span class="spin" style="width:13px;height:13px"></span>':'<span style="width:13px;height:13px;border-radius:50%;border:2px solid var(--line);display:inline-block"></span>';
-  const steps=(j.steps||[]).map(s=>`<div style="display:flex;align-items:center;gap:8px;padding:.28rem 0;font-size:.83rem;color:${s.status==='pending'?'var(--muted)':'var(--ink)'}">${icon(s.status)}<span>${s.name}</span>${s.status==='running'?'<span style="color:var(--muted);font-size:.75rem;margin-left:auto">verifying…</span>':''}</div>`).join('');
-  box.innerHTML=`${j.total>1?`<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">File ${j.processed}/${j.total}</div>${bar(pctFiles)}`:''}
-    <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:10px 0 4px">Verifying ${j.stepFor?('<b style="color:var(--ink)">'+j.stepFor+'</b>'):'file'} — ${done}/${tot} steps</div>
-    ${bar(Math.round(done/tot*100))}
-    <div style="margin-top:8px">${steps}</div>`;}
+  const tot=j.total||0,proc=j.processed||0,pct=tot?Math.round(proc/tot*100):0;
+  const bar=(p)=>`<div style="height:7px;background:var(--field);border-radius:999px;overflow:hidden"><div style="height:100%;width:${p}%;background:var(--teal-d,#0d9488);transition:width .4s"></div></div>`;
+  const tm=(j.timings||[]);const secs=tm.map(t=>t.sec);
+  const avg=secs.length?(secs.reduce((a,b)=>a+b,0)/secs.length):0;
+  const remain=tot&&avg?Math.round((tot-proc)*avg/Math.max(1,Math.min(6,tot-proc))):0; // rough est w/ concurrency
+  const recent=tm.slice(-8).reverse().map(t=>`<div style="display:flex;gap:8px;font-size:.8rem;padding:.2rem 0;border-bottom:1px solid var(--line)"><span style="flex:1">${t.provider}</span><span style="color:${t.errors?'var(--err)':'var(--muted)'}">${t.errors?t.errors+' err':'ok'}</span><span style="color:var(--muted);width:46px;text-align:right">${t.sec}s</span></div>`).join('');
+  box.innerHTML=`<div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--muted);margin-bottom:4px"><span>${proc}/${tot||'?'} files${avg?` · avg ${avg.toFixed(1)}s/file`:''}</span><span>${tot&&proc<tot?`~${remain}s left`:''}</span></div>
+    ${bar(pct)}
+    ${tm.length?`<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:10px 0 2px">Completed — time per workflow</div>${recent}`:'<div style="margin-top:8px;font-size:.82rem;color:var(--muted)"><span class="spin" style="width:12px;height:12px"></span> reading applications &amp; documents (AI)…</div>'}`;}
 function unreadCount(){return JOBSCACHE.filter(j=>!READ.has(j.id+j.status)).length;}
 function renderNotif(){const n=unreadCount();const b=$('notifBadge');b.textContent=n||'';b.style.display=n?'flex':'none';
   const run=JOBSCACHE.some(j=>j.status==='running');$('bellBtn').style.color=run?'var(--teal-d)':'';
@@ -401,26 +401,41 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
       <td style="padding:.5rem 8px .5rem 0;vertical-align:top;white-space:nowrap">${elDot(worst)} <span style="font-weight:600;text-transform:capitalize">${el}</span></td>
       <td style="vertical-align:top;padding-top:.5rem"><span style="font-size:.7rem;font-weight:700;color:${col}">${label}</span></td>
       <td style="vertical-align:top;padding:.5rem 0;font-size:.82rem">${detail}</td></tr>`;}).join('');
+  const pflags=(LAST.flags||[]).filter(f=>f.workflowId===wid);
+  const bySev={error:[],warning:[],info:[]};pflags.forEach(f=>(bySev[f.severity]||bySev.info).push(f));
+  const errGrp=(sev,color,lbl)=>bySev[sev].length?`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:${color};margin:12px 0 4px">${lbl} (${bySev[sev].length})</div>`+bySev[sev].map(f=>`<div style="border-bottom:1px solid var(--line);padding:.45rem 0;font-size:.83rem"><b style="text-transform:capitalize">${f.element||'—'}</b>${f.state?' · '+f.state:''} — ${f.message}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${f.expected}</div>`:''}</div>`).join(''):'';
+  const errBody=pflags.length?(errGrp('error','var(--err)','Errors')+errGrp('warning','var(--warn)','Warnings')+errGrp('info','var(--muted)','Info')):'<div style="color:var(--ok);padding:1rem 0">✓ No findings — this provider passed all active checks.</div>';
+  const nerr=bySev.error.length,nwarn=bySev.warning.length;
   $('detailBody').innerHTML=`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="font-weight:700;font-size:1.1rem">${p.provider||wid}</div>
       <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.78rem" onclick="openPacket('${wid}',this)">${ic('download',13)} PSV packet</button>
       <a class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.78rem;text-decoration:none" href="https://ng.certifyos.com/credentialing/${wid}?organizationId=${ORG}" target="_blank" rel="noopener">${ic('external',13)} Open in platform</a></div>
     <div style="color:var(--muted);font-size:.82rem;margin-bottom:10px">NPI ${p.npi||''} · ${p.type||''} · ${p.states||''} · audit confidence ${p.auditConfidence??''}</div>
-    <div class="dtabs" style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px">
-      <button class="dtab on" data-t="elem" onclick="detailTab('elem','${p.npi}')">Element checks</button>
+    <div class="dtabs" style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px;flex-wrap:wrap">
+      <button class="dtab on" data-t="matrix" onclick="detailTab('matrix','${p.npi}')">Verification matrix</button>
+      <button class="dtab" data-t="errors" onclick="detailTab('errors','${p.npi}')">Error summary${nerr||nwarn?` <span style="color:${nerr?'var(--err)':'var(--warn)'}">(${nerr+nwarn})</span>`:''}</button>
+      <button class="dtab" data-t="elem" onclick="detailTab('elem','${p.npi}')">Element checks</button>
       <button class="dtab" data-t="edu" onclick="detailTab('edu','${p.npi}')">E&amp;T insight (AI)</button>
       <button class="dtab" data-t="caqh" onclick="detailTab('caqh','${p.npi}')">CAQH insight (AI)</button></div>
-    <div id="dpane-elem" class="dpane">
+    <div id="dpane-matrix" class="dpane"><div id="matrixBox"></div></div>
+    <div id="dpane-errors" class="dpane" style="display:none">
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:2px">${pflags.length} finding(s) — ${nerr} error, ${nwarn} warning, ${bySev.info.length} info</div>${errBody}</div>
+    <div id="dpane-elem" class="dpane" style="display:none">
       <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:0 0 8px">Platform vs application — element checks</div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Status</th><th>Finding</th></tr>${rows}</table></div>
     <div id="dpane-edu" class="dpane" style="display:none"><div id="eduInsightBox"></div></div>
     <div id="dpane-caqh" class="dpane" style="display:none"><div id="caqhInsightBox"></div></div>`;
-  $('detailModal').style.display='flex';}
+  $('detailModal').style.display='flex';
+  matrixTab(p.npi);}
 function detailTab(t,npi){
   document.querySelectorAll('#detailBody .dtab').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
   document.querySelectorAll('#detailBody .dpane').forEach(p=>p.style.display='none');
   $('dpane-'+t).style.display='';
+  if(t==='matrix'&&!$('matrixBox').dataset.loaded){$('matrixBox').dataset.loaded='1';matrixTab(npi);}
   if(t==='edu'&&!$('eduInsightBox').dataset.loaded){$('eduInsightBox').dataset.loaded='1';eduInsight(npi);}
   if(t==='caqh'&&!$('caqhInsightBox').dataset.loaded){$('caqhInsightBox').dataset.loaded='1';caqhInsight(npi);}}
+let CAQHCACHE={};
+async function getCaqh(npi){if(CAQHCACHE[npi])return CAQHCACHE[npi];
+  const r=await (await fetch(`/api/caqh-insight?org=${ORG}&npi=${npi}`)).json();CAQHCACHE[npi]=r;return r;}
 async function eduInsight(npi){const box=$('eduInsightBox');box.innerHTML='<div class="card p-3" style="margin-bottom:10px"><span class="spin"></span> AI reading the application &amp; AMA profile…</div>';
   try{const r=await (await fetch(`/api/education-insight?org=${ORG}&npi=${npi}`)).json();
     if(!r.ok){box.innerHTML=`<div class="card p-3" style="margin-bottom:10px;color:var(--warn)">${r.reason}</div>`;return;}
@@ -439,12 +454,12 @@ async function eduInsight(npi){const box=$('eduInsightBox');box.innerHTML='<div 
       <div style="margin-top:10px;font-weight:600;color:${col}">Conclusion: ${r.conclusion}</div>
       ${(r.flags||[]).filter(f=>f.severity!=='info').map(f=>`<div style="font-size:.8rem;color:var(--muted);margin-top:3px">• ${f.message}</div>`).join('')}</div>`;
   }catch(e){box.innerHTML='<div class="card p-3" style="margin-bottom:10px">Error: '+e+'</div>';}}
-async function caqhInsight(npi){const box=$('caqhInsightBox');box.innerHTML='<div class="card p-3" style="margin-bottom:10px"><span class="spin"></span> AI reading the CAQH application…</div>';
-  try{const r=await (await fetch(`/api/caqh-insight?org=${ORG}&npi=${npi}`)).json();
-    if(!r.ok){box.innerHTML=`<div class="card p-3" style="margin-bottom:10px;color:var(--warn)">${r.reason}</div>`;return;}
-    const dot=s=>s==='ok'?'<span style="color:var(--ok)">●</span>':s==='review'?'<span style="color:var(--err)">●</span>':'<span style="color:var(--muted)">○</span>';
-    const demo=(r.demographics||[]).map(d=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.3rem 0">${dot(d.status)} ${d.field}</td><td style="text-align:center;color:var(--muted)">${d.platform}</td><td style="text-align:center;color:var(--muted)">${d.caqh}</td></tr>`).join('');
-    const chk=(v,goodTxt,badTxt)=>v===true?`<span style="color:var(--ok)">✓${goodTxt?' '+goodTxt:''}</span>`:v===false?`<span style="color:var(--err)">✕${badTxt?' '+badTxt:''}</span>`:'<span style="color:var(--line)">n/a</span>';
+const _mdot=s=>s==='ok'?'<span style="color:var(--ok)">●</span>':s==='review'?'<span style="color:var(--err)">●</span>':'<span style="color:var(--muted)">○</span>';
+const _mchk=(v,g,b)=>v===true?`<span style="color:var(--ok)">✓${g?' '+g:''}</span>`:v===false?`<span style="color:var(--err)">✕${b?' '+b:''}</span>`:'<span style="color:var(--line)">n/a</span>';
+async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)return;box.dataset.loaded='1';
+  box.innerHTML='<div class="card p-3" style="margin-bottom:10px"><span class="spin"></span> Verifying every element across platform, documents &amp; CAQH…</div>';
+  try{const r=await getCaqh(npi);
+    if(!r.ok){box.dataset.loaded='';box.innerHTML=`<div class="card p-3" style="margin-bottom:10px;color:var(--warn)">${r.reason}</div>`;return;}
     const itcell=v=>v===true?'<span style="color:var(--ok)">✓</span>':v===false?'<span style="color:var(--err)">✕</span>':'—';
     const itemRow=it=>`<tr style="font-size:.75rem"><td style="padding:.2rem 0;color:var(--ink)">${it.label||'entry'}</td>
       <td style="text-align:center">${itcell(it.verified)}${it.verifiedAt?' <span style="color:var(--muted)">'+it.verifiedAt+'</span>':''}</td>
@@ -454,42 +469,47 @@ async function caqhInsight(npi){const box=$('caqhInsightBox');box.innerHTML='<di
       <td style="text-align:center">${itcell(it.datesOk)}</td></tr>`;
     const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const exp=n>1;
       const head=`<tr style="border-bottom:1px solid var(--line)">
-      <td style="padding:.45rem 6px .45rem 0;vertical-align:top;white-space:nowrap">${dot(e.status)} ${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}${e.element}${n?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
+      <td style="padding:.45rem 6px .45rem 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}${e.element}${n?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.requiredWhy}">${e.required?'<span style="color:var(--ink)">Yes</span>':'<span style="color:var(--muted)">No</span>'}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center">${e.attested===true?'<span style="color:var(--ok)">Yes</span>':e.attested===false?'<span style="color:var(--muted)">No</span>':'<span style="color:var(--line)">n/a</span>'}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.verifiedNote}">${e.expectedButMissing?'<span style="color:var(--err);font-weight:700">MISSING</span>':chk(e.verified)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.sourceNote}">${chk(e.sourceOk)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.valueNote}">${chk(e.valueOk)}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center">${e.docRequired?chk(e.docPresent,'','missing'):(e.docPresent===null?'<span style="color:var(--line)">n/a</span>':(e.docPresent?'<span style="color:var(--ok)">✓</span>':'—'))}</td>
-      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.datesNote}">${chk(e.datesOk)}</td>
+      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.verifiedNote}">${e.expectedButMissing?'<span style="color:var(--err);font-weight:700">MISSING</span>':_mchk(e.verified)}</td>
+      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.sourceNote}">${_mchk(e.sourceOk)}</td>
+      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.valueNote}">${_mchk(e.valueOk)}</td>
+      <td style="vertical-align:top;padding-top:.45rem;text-align:center">${e.docRequired?_mchk(e.docPresent,'','missing'):(e.docPresent===null?'<span style="color:var(--line)">n/a</span>':(e.docPresent?'<span style="color:var(--ok)">✓</span>':'—'))}</td>
+      <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.datesNote}">${_mchk(e.datesOk)}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.activeNote}">${e.activeOk===true?'<span style="color:var(--ok)">active</span>':e.activeOk===false?'<span style="color:var(--err)">expired</span>':'<span style="color:var(--line)">n/a</span>'}</td>
       <td style="vertical-align:top;padding:.45rem 0;font-size:.76rem;color:${e.findings&&e.findings.length?'var(--err)':'var(--muted)'}">${e.findings&&e.findings.length?e.findings.map(f=>'• '+f).join('<br>'):'—'}</td></tr>`;
       const detail=exp?`<tr id="mi${i}" style="display:none;background:var(--field)"><td colspan="10" style="padding:.4rem .6rem .5rem 20px">
         <table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.68rem;text-transform:uppercase;text-align:left"><th>Entry</th><th>Verified</th><th>Source</th><th>Active</th><th>Value</th><th>Dates</th></tr>${its.map(itemRow).join('')}</table></td></tr>`:'';
       return head+detail;}).join('');
     const cell=(v,cnt)=>cnt===null?'<span style="color:var(--line)">n/a</span>':`<div style="font-size:.8rem">${v||'—'}</div>`;
-    const three=(r.threeWay||[]).map(e=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.4rem 6px 0 0;vertical-align:top;white-space:nowrap">${dot(e.status)} ${e.element}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.platform,e.platformCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.docs,e.docCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.caqh,e.caqhCount)}</td></tr>`).join('');
-    const docs=(r.supportingDocs||[]).map(d=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.3rem 0">${dot(d.status)} ${d.name}</td><td style="text-align:center">${d.inPacket?'✓':'—'}</td><td style="text-align:center">${d.inBackend?'✓':'—'}</td><td style="font-size:.78rem;color:${d.status==='review'?'var(--err)':'var(--muted)'}">${d.note}</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted);font-size:.82rem;padding:.3rem 0">no reconcilable documents found</td></tr>';
+    const three=(r.threeWay||[]).map(e=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.4rem 6px 0 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${e.element}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.platform,e.platformCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.docs,e.docCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.caqh,e.caqhCount)}</td></tr>`).join('');
+    const docs=(r.supportingDocs||[]).map(d=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.3rem 0">${_mdot(d.status)} ${d.name}</td><td style="text-align:center">${d.inPacket?'✓':'—'}</td><td style="text-align:center">${d.inBackend?'✓':'—'}</td><td style="font-size:.78rem;color:${d.status==='review'?'var(--err)':'var(--muted)'}">${d.note}</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted);font-size:.82rem;padding:.3rem 0">no reconcilable documents found</td></tr>';
+    const col=r.isReview?'var(--err)':'var(--ok)';
+    box.innerHTML=`<div class="card p-4" style="margin-bottom:10px">
+      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:0 0 2px">Element verification matrix</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.7rem;text-transform:uppercase"><th style="text-align:left">Element</th><th>Required?</th><th>In CAQH?</th><th>Verified?</th><th>Source?</th><th>Value?</th><th>Docs?</th><th>Dates?</th><th>Active?</th><th style="text-align:left">Findings</th></tr>${mrx}</table>
+      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 2px">Element level — Platform vs Supporting docs vs CAQH</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Platform</th><th>Supporting docs</th><th>CAQH app</th></tr>${three}</table>
+      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 2px">Supporting documents — packet vs Platform</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase"><th style="text-align:left">Document</th><th>Packet</th><th>Platform</th><th style="text-align:left">&nbsp;</th></tr>${docs}</table>
+      <div style="margin-top:12px;font-weight:600;color:${col}">Conclusion: ${r.conclusion}</div></div>`;
+  }catch(e){box.dataset.loaded='';box.innerHTML='<div class="card p-3" style="margin-bottom:10px">Error: '+e+'</div>';}}
+async function caqhInsight(npi){const box=$('caqhInsightBox');box.innerHTML='<div class="card p-3" style="margin-bottom:10px"><span class="spin"></span> AI reading the CAQH application…</div>';
+  try{const r=await getCaqh(npi);
+    if(!r.ok){box.innerHTML=`<div class="card p-3" style="margin-bottom:10px;color:var(--warn)">${r.reason}</div>`;return;}
+    const demo=(r.demographics||[]).map(d=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.3rem 0">${_mdot(d.status)} ${d.field}</td><td style="text-align:center;color:var(--muted)">${d.platform}</td><td style="text-align:center;color:var(--muted)">${d.caqh}</td></tr>`).join('');
     const wh=(r.workHistory||[]).map(e=>`<div style="font-size:.83rem;padding:.35rem 0;border-bottom:1px solid var(--line)"><b>${e.employer||e.organization||''}</b>${e.role||e.title?' · '+(e.role||e.title):''} <span style="color:var(--muted)">${e.start_date||''}–${e.end_date||(e.is_current?'present':'')}</span></div>`).join('')||'<div style="color:var(--muted);font-size:.82rem">none extracted from the application</div>';
     const unfav=(r.disclosureAnswers||[]).filter(d=>d.unfavorable||d.answer==='yes'||d.answer===true);
     const gaps=(r.gapsDisclosed||[]);
-    const col=r.isReview?'var(--err)':'var(--ok)';
     box.innerHTML=`<div class="card p-4" style="margin-bottom:10px">
       <div style="font-weight:600;margin-bottom:4px">CAQH application — AI insight</div>
-      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:8px 0 2px">Element verification matrix</div>
-      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.7rem;text-transform:uppercase"><th style="text-align:left">Element</th><th>Required?</th><th>In CAQH?</th><th>Verified?</th><th>Source?</th><th>Value?</th><th>Docs?</th><th>Dates?</th><th>Active?</th><th style="text-align:left">Findings</th></tr>${mrx}</table>
-      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 2px">Identity &amp; attestation — platform (BQ) vs CAQH</div>
+      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:8px 0 2px">Identity &amp; attestation — Platform vs CAQH</div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase"><th style="text-align:left">Field</th><th>Platform</th><th>CAQH</th></tr>${demo}</table>
-      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:12px 0 2px">Element level — Platform vs Supporting docs vs CAQH</div>
-      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Platform (BQ)</th><th>Supporting docs</th><th>CAQH app</th></tr>${three}</table>
-      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:12px 0 2px">Supporting documents — packet vs platform (BQ)</div>
-      <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase"><th style="text-align:left">Document</th><th>Packet</th><th>BQ</th><th style="text-align:left">&nbsp;</th></tr>${docs}</table>
       <div style="font-size:.78rem;color:var(--muted);margin:12px 0 4px">Work history (self-reported)${r.backendWorkHistory?` · ${(r.backendWorkHistory||[]).length} verified in platform`:''}:</div>${wh}
       <div style="font-size:.78rem;color:var(--muted);margin-top:8px">Disclosure answers: ${(r.disclosureAnswers||[]).length} · ${unfav.length} unfavorable · gaps disclosed: ${gaps.length}</div>
       ${unfav.map(d=>`<div style="font-size:.8rem;color:var(--warn)">• ${d.question||''}: <b>${d.answer}</b></div>`).join('')}
-      ${gaps.map(g=>`<div style="font-size:.8rem;color:var(--muted)">• gap ${g.start_date||g.from||''}–${g.end_date||g.to||''}${g.explanation?' — '+g.explanation:''}</div>`).join('')}
-      <div style="margin-top:10px;font-weight:600;color:${col}">Conclusion: ${r.conclusion}</div>
-      ${(r.flags||[]).filter(f=>f.severity!=='info').map(f=>`<div style="font-size:.8rem;color:var(--muted);margin-top:3px">• ${f.message}</div>`).join('')}</div>`;
+      ${gaps.map(g=>`<div style="font-size:.8rem;color:var(--muted)">• gap ${g.start_date||g.from||''}–${g.end_date||g.to||''}${g.explanation?' — '+g.explanation:''}</div>`).join('')}</div>`;
   }catch(e){box.innerHTML='<div class="card p-3" style="margin-bottom:10px">Error: '+e+'</div>';}}
 function openOrAudit(wid,npi){if(LASTMAP[wid])openDetail(wid);else auditFile(wid,npi);}
 function sortBy(k){SORT.dir=(SORT.key===k)?-SORT.dir:1;SORT.key=k;renderResults();}
@@ -577,7 +597,7 @@ async function syncGuidelines(){const url=$('guideUrl').value.trim();if(!url){$(
   }catch(e){$('guideMsg').textContent='Error: '+e;}finally{b.disabled=false;}}
 async function saveConfig(){const b=$('saveCfgBtn'),m=$('saveCfgMsg');b.disabled=true;m.innerHTML='<span class="spin"></span> saving to BigQuery…';
   try{const r=await (await fetch('/api/config/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG})})).json();
-    if(r.ok)m.innerHTML=`<span style="color:var(--ok);display:inline-flex;align-items:center;gap:4px">${ic('check',14)}Saved</span> — ${r.disabledRules} disabled, ${r.customRules} custom rule(s) persisted to BQ.`;
+    if(r.ok)m.innerHTML=`<span style="color:var(--ok);display:inline-flex;align-items:center;gap:4px">${ic('check',14)}Saved</span> — ${r.disabledRules} disabled, ${r.customRules} custom rule(s) persisted to Platform.`;
     else m.innerHTML=`<span style="color:var(--warn)">${r.reason}</span>`;
   }catch(e){m.textContent='Error: '+e;}finally{b.disabled=false;}}
 async function addRule(){const t=$('newRule').value.trim();if(!t)return;const b=$('addRuleBtn');b.disabled=true;

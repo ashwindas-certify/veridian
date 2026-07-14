@@ -2,12 +2,13 @@
 """PSV Audit web app: client selector, audit runner, per-client rule config, help-bot.
 Run:  cd ~/Downloads/psv_audit && python -m uvicorn app:app --port 8000
 """
-import os, json, glob, urllib.request, threading, uuid
+import os, json, glob, urllib.request, threading, uuid, time
 from collections import Counter
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 JOBS = {}  # in-memory job queue: jobId -> {type,client,org,status,processed,total,flags,note,startedAt,finishedAt}
+DEEP_CONCURRENCY = int(os.environ.get("DEEP_CONCURRENCY", "6"))  # files read in parallel per run
 
 HISTORY = "audit_history.jsonl"                 # local mirror (instant reads)
 HISTORY_TABLE = "certifyos-production-platform.psv_audit.audit_history"   # durable BQ log
@@ -111,7 +112,7 @@ from google import genai
 from google.genai import types
 from google.cloud import bigquery
 
-import reconcile, master_record, audit, packet_audit, caqh_audit, rules_engine_results, education_audit, packet_extract
+import reconcile, master_record, audit, packet_audit, caqh_audit, rules_engine_results, education_audit, packet_extract, combined_extract
 
 app = FastAPI(title="PSV Audit")
 CLIENTS = "clients"
@@ -328,36 +329,25 @@ def deep_packet_audit(wfs, master, jid=None):
         path = os.path.join(PACKETS, f"{wid}.pdf")
         _init_steps(jid, (m.get("demographics") or {}).get("lastName") or wid)
         try:
-            # reuse prior AI reads if we have them; only the missing ones are (re)extracted
+            # reuse prior AI reads if we have them; only read the PDF when something is missing
             pkt = get_extraction(wid, "packet")
             full = get_extraction(wid, "caqh")
             edu = get_extraction(wid, "education")
-            todo = {}  # etype -> (extract_fn, step_idx)
-            if pkt is None: todo["packet"] = (packet_extract.extract, 0)
-            if full is None: todo["caqh"] = (caqh_audit.extract_caqh_full, 1)
-            if edu is None: todo["education"] = (education_audit.extract_education, 2)
-            fresh = {}
-            if todo:
+            if pkt is None or full is None or edu is None:
                 if not os.path.exists(path):
                     download_packet(wid, org, path)
-                for et, (_fn, idx) in todo.items():
-                    _set_step(jid, idx, "running")
-                with ThreadPoolExecutor(max_workers=3) as ex:   # 3 independent Gemini reads in parallel
-                    futs = {ex.submit(fn, path): (et, idx) for et, (fn, idx) in todo.items()}
-                    for fut in as_completed(futs):
-                        et, idx = futs[fut]
-                        try:
-                            fresh[et] = fut.result()
-                        except Exception as ex2:
-                            notes.append({"workflowId": wid, "error": f"{et}: {type(ex2).__name__}: {str(ex2)[:150]}"})
-                            fresh[et] = None
-                        _set_step(jid, idx, "done")
-                pkt = pkt if pkt is not None else fresh.get("packet")
-                full = full if full is not None else fresh.get("caqh")
-                edu = edu if edu is not None else fresh.get("education")
-                for et, val in fresh.items():   # persist only newly-read extractions
-                    if val is not None:
-                        record_extraction(org, org, wid, m.get("npi"), et, val)
+                _set_step(jid, 0, "running"); _set_step(jid, 1, "running"); _set_step(jid, 2, "running")
+                try:                                    # ONE PDF read for all three sections
+                    cpkt, ccaqh, cedu = combined_extract.combined_extract(path)
+                except Exception as ex2:
+                    notes.append({"workflowId": wid, "error": f"read: {type(ex2).__name__}: {str(ex2)[:150]}"})
+                    cpkt, ccaqh, cedu = {}, {}, {}
+                if pkt is None and cpkt:
+                    pkt = cpkt; record_extraction(org, org, wid, m.get("npi"), "packet", pkt)
+                if full is None and ccaqh:
+                    full = ccaqh; record_extraction(org, org, wid, m.get("npi"), "caqh", full)
+                if edu is None and cedu:
+                    edu = cedu; record_extraction(org, org, wid, m.get("npi"), "education", edu)
             for i in (0, 1, 2):
                 _set_step(jid, i, "done")
             # fast checks over the (cached or fresh) extractions
@@ -527,11 +517,26 @@ def do_audit(org, npis, assignedTo, limit, deep, jid=None):
     if not wfs: return {"client": client, "summary": [], "flags": [], "note": "no matching PSV-complete workflows"}
     packet_notes = []
     if deep:
-        acc = list(flags); appl_by_wf = {}
-        for i, m in enumerate(master):
-            pf, pn, pa = deep_packet_audit([w for w in wfs if w["workflowId"] == m["workflowId"]], [m], jid)
-            acc += pf; packet_notes += pn; appl_by_wf.update(pa)
-            if jid: JOBS[jid]["processed"] = i + 1
+        acc = list(flags); appl_by_wf = {}; prog_lock = threading.Lock(); done = [0]
+        wf_by_id = {w["workflowId"]: w for w in wfs}
+        def run_one(m):
+            t0 = time.perf_counter()
+            pf, pn, pa = deep_packet_audit([wf_by_id[m["workflowId"]]], [m], None)  # jid=None: no step race
+            return m, pf, pn, pa, round(time.perf_counter() - t0, 1)
+        with ThreadPoolExecutor(max_workers=DEEP_CONCURRENCY) as ex:   # files read in parallel
+            futs = [ex.submit(run_one, m) for m in master]
+            for fut in as_completed(futs):
+                m, pf, pn, pa, sec = fut.result()
+                acc += pf; packet_notes += pn; appl_by_wf.update(pa)
+                dem = m.get("demographics") or {}
+                with prog_lock:
+                    done[0] += 1
+                    if jid:
+                        JOBS[jid]["processed"] = done[0]
+                        JOBS[jid].setdefault("timings", []).append({
+                            "provider": f'{dem.get("firstName", "")} {dem.get("lastName", "")}'.strip() or m["workflowId"],
+                            "wid": m["workflowId"], "sec": sec,
+                            "errors": sum(1 for f in pf if f.get("severity") == "error")})
         # branching applicability: drop absence flags for optional elements the provider doesn't claim
         flags = [g for f in acc
                  for g in caqh_audit.suppress_by_applicability([f], appl_by_wf.get(f.get("workflowId")))]
@@ -648,14 +653,14 @@ def caqh_insight(org: str, npi: str):
             if not os.path.exists(path): download_packet(wid, org, path)
             caqh = caqh_audit.extract_caqh_full(path)   # ALL CAQH elements + supporting-doc presence
         flags = caqh_audit.caqh_audit(m, path, packet=caqh) if m else []
-        elementRows, docRows = caqh_audit.compare_caqh_elements(m, caqh)
-        demoRows = caqh_audit.demographic_compare(m, caqh)
-        flags += caqh_audit.demographic_flags(m, caqh)
         pkt = get_extraction(wid, "packet")   # supporting-document read (reuse audit's read)
         if pkt is None:
             if not os.path.exists(path): download_packet(wid, org, path)
             pkt = packet_extract.extract(path)
             _EXTRACT_CACHE[(wid, "packet")] = pkt
+        elementRows, docRows = caqh_audit.compare_caqh_elements(m, caqh, pkt)
+        demoRows = caqh_audit.demographic_compare(m, caqh)
+        flags += caqh_audit.demographic_flags(m, caqh)
         threeWay = caqh_audit.three_way_compare(m, pkt, caqh)
         dem = (m or {}).get("demographics") or {}
         required = reconcile.required_for(dem.get("providerType"), dem.get("credentialingCycle"),
@@ -711,10 +716,24 @@ def _pipeline_worker(jid, org, limit, deep):
         if not wfs:
             j.update(status="done", note="no PSV-complete files", finishedAt=datetime.now(timezone.utc).isoformat()); return
         if deep:
-            appl_by_wf = {}
-            for i, m in enumerate(master):
-                pf, _, pa = deep_packet_audit([w for w in wfs if w["workflowId"] == m["workflowId"]], [m], jid)
-                flags += pf; appl_by_wf.update(pa); j["processed"] = i + 1
+            appl_by_wf = {}; prog_lock = threading.Lock(); done = [0]
+            wf_by_id = {w["workflowId"]: w for w in wfs}
+            def run_one(m):
+                t0 = time.perf_counter()
+                pf, _, pa = deep_packet_audit([wf_by_id[m["workflowId"]]], [m], None)
+                return m, pf, pa, round(time.perf_counter() - t0, 1)
+            with ThreadPoolExecutor(max_workers=DEEP_CONCURRENCY) as ex:
+                futs = [ex.submit(run_one, m) for m in master]
+                for fut in as_completed(futs):
+                    m, pf, pa, sec = fut.result()
+                    flags += pf; appl_by_wf.update(pa)
+                    dem = m.get("demographics") or {}
+                    with prog_lock:
+                        done[0] += 1; j["processed"] = done[0]
+                        j.setdefault("timings", []).append({
+                            "provider": f'{dem.get("firstName", "")} {dem.get("lastName", "")}'.strip() or m["workflowId"],
+                            "wid": m["workflowId"], "sec": sec,
+                            "errors": sum(1 for f in pf if f.get("severity") == "error")})
             flags = [g for f in flags
                      for g in caqh_audit.suppress_by_applicability([f], appl_by_wf.get(f.get("workflowId")))]
         else:

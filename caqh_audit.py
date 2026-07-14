@@ -2,11 +2,11 @@
 """Phase-3b: CAQH work-history audit.
 
 NCQA requires the provider's self-reported work history (the CAQH application,
-which lives inside the PSV packet PDF) to be reconciled against what the backend
+which lives inside the PSV packet PDF) to be reconciled against what the platform
 actually verified. This reads the CAQH application pages with Gemini on Vertex
 (same client pattern as packet_extract) and emits work-history flags:
   * unexplained employment gaps > 180 days in the CAQH work history,
-  * packet shows work history but backend workHistory is empty,
+  * packet shows work history but platform workHistory is empty,
   * an info summary so reviewers can see the check ran."""
 import argparse, json, os, re, sys
 from datetime import datetime
@@ -152,13 +152,13 @@ def _backend_verdict(master_record, keyword):
 
 
 def _says_no_gap(explanation):
-    """Backend work-history verdict asserts there is NO employment gap."""
+    """Platform work-history verdict asserts there is NO employment gap."""
     e = (explanation or "").lower()
     return "no" in e and "gap" in e
 
 
 def _says_favourable(explanation):
-    """Backend disclosure verdict asserts the questions were answered favourably
+    """Platform disclosure verdict asserts the questions were answered favourably
     / with no adverse answer."""
     e = (explanation or "").lower()
     if "favourabl" in e or "favorabl" in e:
@@ -178,14 +178,14 @@ def caqh_audit(master_record, pdf_path, packet=None):
     disclosure_answers = packet.get("disclosure_answers") or []
     flags = []
 
-    # Backend verdicts (from edit_providers_application_verifications rows).
+    # Platform verdicts (from edit_providers_application_verifications rows).
     wh_verdict = _backend_verdict(master_record, "work")
     disc_verdict = _backend_verdict(master_record, "disclosure")
     unfavorable = [d for d in disclosure_answers if d.get("unfavorable")]
 
     print(
-        "backend work-history verdict: {!r}\n"
-        "backend disclosure verdict:   {!r}\n"
+        "platform work-history verdict: {!r}\n"
+        "platform disclosure verdict:   {!r}\n"
         "AI disclosure_answers ({}): {}\n"
         "AI unfavorable answers: {}".format(
             wh_verdict, disc_verdict, len(disclosure_answers),
@@ -228,17 +228,17 @@ def caqh_audit(master_record, pdf_path, packet=None):
                     f"with no matching explained gap disclosed on the application.",
                 ))
 
-    # 2) Packet shows work history but backend verified work history is empty.
+    # 2) Packet shows work history but platform verified work history is empty.
     backend_wh = master_record.get("workHistory") or []
     if work_history and not backend_wh:
         flags.append(_flag(
             master_record, packet,
             "CAQH_NOT_VERIFIED_IN_BACKEND", "warning", 0.75,
             f"CAQH application lists {len(work_history)} employment period(s) but the "
-            f"backend has no verified work history on record.",
+            f"platform has no verified work history on record.",
         ))
 
-    # 3) Backend "Work History" verdict says NO gap, but the AI found an
+    # 3) Platform "Work History" verdict says NO gap, but the AI found an
     #    unexplained gap > 180 days -> the verified verdict contradicts the packet.
     if unexplained_gaps and wh_verdict is not None and _says_no_gap(wh_verdict):
         biggest = max(unexplained_gaps, key=lambda g: g[0])
@@ -246,13 +246,13 @@ def caqh_audit(master_record, pdf_path, packet=None):
         flags.append(_flag(
             master_record, packet,
             "WORKHISTORY_VERDICT_MISMATCH", "error", 0.7,
-            f"Backend work-history verdict says no employment gap "
+            f"Platform work-history verdict says no employment gap "
             f"(explanation: {wh_verdict!r}), but the CAQH application shows an "
             f"unexplained {gap_days}-day gap ({fmt(gap_start)} to {fmt(gap_end)}), "
             f"between '{prev_emp}' and '{cur_emp}'.",
         ))
 
-    # 4) Backend "Disclosure" verdict says answered favourably, but the AI found
+    # 4) Platform "Disclosure" verdict says answered favourably, but the AI found
     #    at least one unfavorable disclosure answer -> contradiction.
     disclosure_mismatch = bool(unfavorable) and disc_verdict is not None and _says_favourable(disc_verdict)
     if disclosure_mismatch:
@@ -260,12 +260,12 @@ def caqh_audit(master_record, pdf_path, packet=None):
         flags.append(_flag(
             master_record, packet,
             "DISCLOSURE_VERDICT_MISMATCH", "error", 0.7,
-            f"Backend disclosure verdict says answered favourably "
+            f"Platform disclosure verdict says answered favourably "
             f"(explanation: {disc_verdict!r}), but the CAQH application has "
             f"{len(unfavorable)} unfavorable disclosure answer(s): {qs}.",
         ))
 
-    # 5) AI found an unfavorable disclosure answer regardless of backend; surface
+    # 5) AI found an unfavorable disclosure answer regardless of platform; surface
     #    for review, unless already covered by the mismatch above.
     if unfavorable and not disclosure_mismatch:
         qs = "; ".join(str(d.get("question")) for d in unfavorable)
@@ -311,7 +311,11 @@ Extract ONLY what is actually present, as JSON with EXACTLY this shape:
 Rules:
 - demographics.caqh_id is the CAQH Provider ID printed on the application; provider_type is the
   provider's degree/type (e.g. MD, DO, NP, PA); dob as YYYY-MM-DD.
-- attestation_date is the date the provider signed/attested the CAQH application (YYYY-MM-DD).
+- attestation_date is the CAQH application's OWN last-attested / last-signed date, printed on the
+  CAQH application page itself — usually at the TOP of the application or in the page HEADER/FOOTER,
+  labeled like "Last Attested", "Attestation Date", "Date Attested", or "Last Updated". Use ONLY the
+  CAQH application's attestation date. Do NOT use the date on a separate state-release, authorization,
+  consent, or release-of-information form — those are different documents. Return YYYY-MM-DD.
 - professional_ids: NPI, DEA, CDS, license numbers etc. as the provider self-reports them.
 - board_certifications.status: e.g. "Certified", "Board Eligible", "Not Certified".
 - education_training.type: e.g. "Medical School", "Residency", "Fellowship", "Internship".
@@ -335,7 +339,7 @@ def extract_caqh_full(pdf_path):
     return json.loads(resp.text)
 
 
-# Map each CAQH element to the backend master-record key it should reconcile against.
+# Map each CAQH element to the platform master-record key it should reconcile against.
 _ELEMENT_MAP = [
     ("demographics",          "demographics",       "Demographics"),
     ("specialties",           "specialties",        "Specialties"),
@@ -350,7 +354,7 @@ _ELEMENT_MAP = [
 
 
 def _count(v):
-    """Normalize a backend/CAQH element value to a presence count."""
+    """Normalize a platform/CAQH element value to a presence count."""
     if v is None:
         return 0
     if isinstance(v, list):
@@ -360,7 +364,7 @@ def _count(v):
     return 1 if v else 0
 
 
-# Which fields to show as the human "what we found" summary, per element (CAQH keys / backend keys).
+# Which fields to show as the human "what we found" summary, per element (CAQH keys / platform keys).
 _SUMM_KEYS = {
     "demographics": ["first_name", "last_name"], "specialties": ["name"],
     "state_licenses": ["state", "number"], "dea": ["number", "state"],
@@ -415,9 +419,43 @@ def _doc_cats(text):
     return {label for label, kws in _DOC_CATS if any(k in t for k in kws)}
 
 
-def compare_caqh_elements(master, full):
-    """Per-element: what CAQH self-reports vs what the backend (BQ) has, plus supporting-doc
-    reconciliation between the packet PDF and the BQ document list. Returns
+# Element data actually read from the packet PDF implies that document is present.
+_PKT_DOC_IMPLIES = {"state_licenses": "State License", "dea": "DEA / CDS",
+                    "malpractice": "Malpractice / COI", "board_certifications": "Board Certification"}
+
+def doc_category_sets(master, packet=None, full=None):
+    """Which supporting-document CATEGORIES are present in Platform (BQ) vs in the packet.
+    Platform: the actual attached-document rows (edit_providers_supporting_documents). Packet: the
+    document labels the AI saw in the PDF + any element block it read + CAQH's own attachment list."""
+    master, packet, full = master or {}, packet or {}, full or {}
+    bq = set()
+    for row in master.get("supportingDocuments") or []:
+        txt = " ".join(str(row.get(k) or "") for k in (
+            "document_name", "sub_collection_name", "original_file_name", "description",
+            "file_type", "state_id_name", "document_status_name"))
+        bq |= _doc_cats(txt)
+    pkt = set()
+    _CAT_LABELS = {label for label, _ in _DOC_CATS}
+    for item in packet.get("documents_present") or []:
+        if isinstance(item, dict):                       # new {label, category} shape
+            cat = item.get("category")
+            if cat in _CAT_LABELS:
+                pkt.add(cat)
+            pkt |= _doc_cats(f"{item.get('label', '')} {cat or ''}")
+        else:                                            # legacy string label
+            pkt |= _doc_cats(str(item))
+    for d in full.get("supporting_documents") or []:
+        if d.get("present"):
+            pkt |= _doc_cats(d.get("name"))
+    for pk, cat in _PKT_DOC_IMPLIES.items():
+        if packet.get(pk):
+            pkt.add(cat)
+    return bq, pkt
+
+
+def compare_caqh_elements(master, full, packet=None):
+    """Per-element: what CAQH self-reports vs what Platform (BQ) has, plus supporting-doc
+    reconciliation between the packet PDF and the Platform document list. Returns
     (element_rows, doc_rows). Never raises — presence/category-level reconciliation."""
     master = master or {}
     element_rows = []
@@ -438,26 +476,17 @@ def compare_caqh_elements(master, full):
                              "caqhFound": _summarize(caqh_val, _SUMM_KEYS.get(caqh_key, [])),
                              "backendFound": _summarize(be_val, _BE_SUMM_KEYS.get(be_key, []))})
 
-    # --- supporting documents: packet (AI) vs BQ, reconciled by category ---
-    packet_cats = set()
-    for d in full.get("supporting_documents") or []:
-        if d.get("present"):
-            packet_cats |= _doc_cats(d.get("name"))
-    bq_cats = set()
-    for row in master.get("supportingDocuments") or []:
-        label_text = " ".join(str(row.get(k) or "") for k in
-                              ("document_name", "sub_collection_name", "original_file_name", "description"))
-        bq_cats |= _doc_cats(label_text)
-
+    # --- supporting documents: packet vs Platform, reconciled by category ---
+    bq_cats, packet_cats = doc_category_sets(master, packet, full)
     doc_rows = []
     for label, _ in _DOC_CATS:
         inP, inB = label in packet_cats, label in bq_cats
         if inP and inB:
-            status, note = "ok", "present in packet and recorded in platform (BQ)"
+            status, note = "ok", "present in packet and recorded in Platform"
         elif inP and not inB:
-            status, note = "review", "attached to packet but not recorded in platform (BQ)"
+            status, note = "review", "in the packet but not recorded in Platform"
         elif inB and not inP:
-            status, note = "review", "recorded in platform (BQ) but not found in the packet"
+            status, note = "review", "recorded in Platform but not found in the packet"
         else:
             continue  # neither source references this doc type — nothing to reconcile
         doc_rows.append({"name": label, "inPacket": inP, "inBackend": inB,
@@ -466,6 +495,20 @@ def compare_caqh_elements(master, full):
 
 
 # ---------------------------------------------------------------- application-driven applicability
+
+def _parse_states(v):
+    """Normalize an assignedStates/states value (list or delimited string) to a set of upper codes."""
+    out = set()
+    if not v:
+        return out
+    if isinstance(v, list):
+        for x in v:
+            if x: out.add(str(x).strip().upper())
+    else:
+        for x in re.split(r"[,;/\s]+", str(v)):
+            if x.strip(): out.add(x.strip().upper())
+    return {s for s in out if s}
+
 
 def _is_board_certified(bc):
     """True if the CAQH board-cert list contains a genuinely certified entry."""
@@ -538,18 +581,22 @@ def _assert_flag(master, element, state, rule, severity, conf, message, category
 
 def assertion_flags(master, full):
     """Where the CAQH application ASSERTS an element (or a state to be credentialed in) that the
-    backend/platform does NOT have -> flag. This is the other half of branching applicability:
+    platform/platform does NOT have -> flag. This is the other half of branching applicability:
     if the provider attests to it and it's missing in platform data, we flag it."""
     master = master or {}
     full = full or {}
     flags = []
     empty = lambda k: not (master.get(k))
 
-    # state licenses the provider lists on CAQH but that platform data lacks
+    # state licenses the provider lists on CAQH but that platform data lacks — ONLY flag states the
+    # provider is actually being credentialed in (assignedStates). A CAQH license for some other
+    # state the client doesn't credential is not an error.
+    demo = master.get("demographics") or {}
+    assigned = _parse_states(demo.get("assignedStates") or demo.get("states"))
     be_states = {(l.get("state") or "").strip().upper() for l in (master.get("stateLicenses") or [])}
     for l in full.get("state_licenses") or []:
         st = (l.get("state") or "").strip().upper()
-        if st and st not in be_states:
+        if st and st not in be_states and (not assigned or st in assigned):
             flags.append(_assert_flag(
                 master, "stateLicenses", st, "APP_ASSERTS_LICENSE_MISSING_IN_PLATFORM", "error", 0.8,
                 f"Provider's CAQH application lists a {st} license ({l.get('number', '')}) "
@@ -687,7 +734,7 @@ def _findings_for(label, flags):
 def _fn(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
-# Identifier fields per element (backend vs packet) for value-level matching, and which elements
+# Identifier fields per element (platform vs packet) for value-level matching, and which elements
 # carry an expiration we can check for "active vs expired".
 _BE_ID = {"stateLicenses": "license_number", "dea": "dea_number", "malpractice": "policy_number"}
 _PKT_ID = {"state_licenses": "license_number", "dea": "number", "malpractice": "policy_number"}
@@ -712,7 +759,7 @@ def _item_label(be_key, r):
     }.get(be_key) or (be_key + " entry"))
 
 def _match_pkt(be_key, r, pkt_rows, pkt_key):
-    """Best-effort match a backend row to the corresponding document row (by identifier, then state)."""
+    """Best-effort match a platform row to the corresponding document row (by identifier, then state)."""
     idf, pidf = _BE_ID.get(be_key), _PKT_ID.get(pkt_key)
     if idf and pidf and _fn(r.get(idf)):
         for x in pkt_rows:
@@ -731,7 +778,7 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
     (confirming we actually pulled the primary source)."""
     master = master or {}; packet = packet or {}; full = full or {}
     required_set = set(required_set or [])
-    doc_cats_present = {d["name"] for d in (doc_rows or []) if d.get("inBackend") or d.get("inPacket")}
+    bq_doc_cats, pkt_doc_cats = doc_category_sets(master, packet, full)  # robust doc presence
     out = []
     ASOF = datetime.now()
     _blank = {"verified": None, "verifiedNote": "—", "sourceOk": None, "sourceNote": "—",
@@ -779,10 +826,10 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
         required_why = " · ".join(why) if why else "not required"
         expected_missing = required and not be_present
 
-        # supporting document required / present
+        # supporting document required / present (Platform attached-docs OR the packet PDF)
         if doc_cat:
             doc_required = required
-            doc_present = (doc_cat in doc_cats_present) or (bool(packet.get(pkt_key)) if pkt_key else False)
+            doc_present = (doc_cat in bq_doc_cats) or (doc_cat in pkt_doc_cats)
         else:
             doc_required, doc_present = False, None
 
@@ -927,7 +974,7 @@ def _load_records(path="master_records.json"):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Audit the CAQH application work history in a PSV packet against the backend record.")
+        description="Audit the CAQH application work history in a PSV packet against the platform record.")
     ap.add_argument("--workflow", required=True, help="workflowId to audit")
     ap.add_argument("--records", default="master_records.json", help="path to master_records.json")
     ap.add_argument("--packets-dir", default="packets", help="directory holding <workflowId>.pdf")
