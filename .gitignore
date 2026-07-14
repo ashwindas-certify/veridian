@@ -1,0 +1,29 @@
+# secrets & credentials — NEVER commit
+.token
+*.json.key
+create-*.json
+*service-account*.json
+*-key.json
+
+# PHI / generated data
+packets/
+*.pdf
+audit_history.jsonl
+*.csv
+*.xlsx
+master_records.json
+workflows_10.json
+wf_sample.json
+flags.json
+*_guidelines.txt
+clients/*.guidelines.txt
+clients/*.generated.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+_chk.js
+
+url.txt

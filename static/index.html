@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veridian</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Pinterest-style: red accent, white + airy, rounded cards. --teal var reused as the brand accent. */
+  :root{--teal:#e60023;--teal-d:#c8001e;--ink:#111111;--bg:#ffffff;--card:#ffffff;--field:#efefef;--line:#00000012;
+        --muted:#767676;--ok:#0a7d33;--warn:#b45309;--err:#e60023;--header:rgba(255,255,255,.82)}
+  body.dark{--ink:#f5f5f5;--bg:#121212;--card:#1f1f1f;--field:#2a2a2a;--line:#ffffff1f;--muted:#a8a8a8;
+        --teal:#ff556e;--teal-d:#ff7286;--ok:#4ade80;--warn:#fbbf24;--err:#ff556e;--header:rgba(18,18,18,.82)}
+  *{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Inter,system-ui,sans-serif;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{background:var(--bg);color:var(--ink);margin:0;transition:background .2s,color .2s}
+  .wrap{max-width:1140px;margin:0 auto;padding:0 24px}
+  header{background:var(--header);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:70}
+  .logo{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--teal),#ff4b63);display:inline-flex;align-items:center;justify-content:center;color:#fff}
+  select,input,textarea{background:var(--field);border:1px solid transparent;color:var(--ink);border-radius:12px;padding:.6rem .9rem;font-size:.92rem;outline:none;transition:.15s;line-height:1.3}
+  select:focus,input:focus,textarea:focus{border-color:var(--teal);background:var(--card);box-shadow:0 0 0 4px #0d948820}
+  textarea{resize:vertical} label{font-weight:500}
+  select{appearance:none;cursor:pointer;font-weight:500;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a8a8e' stroke-width='3'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .85rem center;padding:.6rem 2.1rem .6rem 1rem}
+  select:hover,input:hover{background:color-mix(in srgb, var(--field) 88%, #000)}
+  body.dark select:hover, body.dark input:hover{background:color-mix(in srgb, var(--field) 82%, #fff)}
+  .btn{background:var(--teal);color:#fff;border:0;border-radius:999px;padding:.6rem 1.35rem;font-weight:700;font-size:.9rem;cursor:pointer;transition:.12s}
+  .btn:hover{filter:brightness(1.05)} .btn:active{transform:scale(.97)} .btn:disabled{opacity:.5;cursor:default}
+  .btn-ghost{background:var(--field);color:var(--teal-d)}
+  .icon{background:transparent;border:0;border-radius:10px;width:38px;height:38px;cursor:pointer;color:var(--ink);display:inline-flex;align-items:center;justify-content:center;transition:.12s}
+  .icon:hover{background:var(--field)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:0 1px 3px #0000000d,0 10px 30px #0000000a}
+  .tabs{display:inline-flex;background:var(--field);border-radius:12px;padding:3px;gap:2px;margin-bottom:22px}
+  .tab{cursor:pointer;padding:.45rem 1.15rem;border-radius:9px;color:var(--muted);font-weight:600;font-size:.88rem;transition:.15s}
+  .tab.active{color:var(--ink);background:var(--card);box-shadow:0 1px 3px #00000021}
+  .chip{font-size:.72rem;font-weight:600;padding:.18rem .6rem;border-radius:999px}
+  .c-CLEAN{background:#34c75922;color:var(--ok)} .c-CHECK{background:#ff950026;color:var(--warn)} .c-REVIEW{background:#ff3b3022;color:var(--err)}
+  table{width:100%;border-collapse:collapse}
+  th{font-size:.72rem;text-transform:uppercase;letter-spacing:.02em;color:var(--muted);text-align:left;padding:.65rem .9rem;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
+  th:hover{color:var(--teal-d)}
+  td{padding:.65rem .9rem;border-bottom:1px solid var(--line);font-size:.88rem} tr:last-child td{border-bottom:0}
+  .sw{width:44px;height:26px;background:#78788040;border-radius:999px;position:relative;cursor:pointer;transition:.2s;flex:0 0 auto}
+  .sw.on{background:var(--ok)} .sw::after{content:'';position:absolute;top:2px;left:2px;width:22px;height:22px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px #0000004d}
+  .sw.on::after{left:20px}
+  .bar{height:8px;border-radius:999px;background:var(--teal)}
+  .sev-error{color:var(--err)} .sev-warning{color:var(--warn)} .sev-info{color:var(--teal-d)}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+  .fact{font-size:.95rem;line-height:1.55;transition:opacity .2s}
+  .spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--teal);border-radius:50%;display:inline-block;animation:sp 1s linear infinite;vertical-align:middle}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  #logoIc,#bellIc,#fabIc,#closeIc,.icon,.btn{display:inline-flex;align-items:center;justify-content:center}
+  svg{display:block} .btn svg{margin-right:6px}
+  /* iOS-style custom dropdown */
+  .xsel{position:relative;display:inline-block}
+  .xsel-btn{width:100%;text-align:left;background:var(--field);border:1px solid transparent;border-radius:12px;padding:.6rem 1rem;font-size:.92rem;font-weight:500;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;transition:.15s}
+  .xsel-btn:hover{background:color-mix(in srgb,var(--field) 88%,#000)}
+  body.dark .xsel-btn:hover{background:color-mix(in srgb,var(--field) 82%,#fff)}
+  .xsel-btn svg{color:var(--muted);flex:0 0 auto}
+  .xsel-menu{position:absolute;top:calc(100% + 6px);left:0;min-width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 44px #0000002e;z-index:200;padding:6px;max-height:320px;overflow:auto}
+  .xsel-opt{padding:.55rem .7rem;border-radius:9px;font-size:.9rem;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;white-space:nowrap;color:var(--ink)}
+  .xsel-opt:hover{background:var(--field)} .xsel-opt.sel{color:var(--teal-d);font-weight:600}
+  .typing{display:inline-flex;gap:5px;align-items:center;padding:2px 0}
+  .typing i{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;animation:blink 1.3s infinite}
+  .typing i:nth-child(2){animation-delay:.18s} .typing i:nth-child(3){animation-delay:.36s}
+  @keyframes blink{0%,70%,100%{opacity:.25;transform:translateY(0)}35%{opacity:1;transform:translateY(-4px)}}
+</style>
+</head>
+<body>
+<header><div class="wrap flex items-center justify-between py-3">
+  <div class="flex items-center gap-3"><span class="logo" id="logoIc"></span>
+    <div><div style="font-weight:700;font-size:1.05rem;letter-spacing:.01em">Veridian</div><div style="font-size:.72rem;color:var(--muted)">Confidence in every credential</div></div></div>
+  <div class="flex items-center gap-2">
+    <span style="font-size:.8rem;color:var(--muted)">Client</span>
+    <div class="xsel" id="clientWrap" style="position:relative">
+      <button class="xsel-btn" id="clientBtn" onclick="toggleClientMenu(event)" style="width:300px">
+        <span id="clientBtnLabel" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Select client</span>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div id="clientMenu" class="xsel-menu" style="display:none;width:340px;left:0;top:calc(100% + 6px)">
+        <input id="clientSearch" placeholder="Search client…" autocomplete="off" oninput="filterClients()" onclick="event.stopPropagation()" style="width:100%;margin-bottom:6px">
+        <div id="clientList" style="max-height:300px;overflow:auto"></div>
+      </div>
+    </div>
+    <button class="icon" id="bellBtn" title="Notifications" onclick="toggleNotif()" style="position:relative"><span id="bellIc"></span>
+      <span id="notifBadge" style="position:absolute;top:-5px;right:-5px;background:var(--err);color:#fff;font-size:.6rem;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 3px;font-weight:700"></span></button>
+    <button class="icon" id="modeBtn" title="Toggle night mode" onclick="toggleMode()"></button></div>
+</div></header>
+
+<div class="wrap py-6">
+  <div class="tabs">
+    <div class="tab active" data-t="run" onclick="show('run')">Run Audit</div>
+    <div class="tab" data-t="dash" onclick="show('dash')">Dashboard</div>
+    <div class="tab" data-t="rules" onclick="show('rules')">Settings</div>
+  </div>
+
+  <section id="run">
+    <div class="card p-3 mb-3" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="recSearch" placeholder="Search provider / NPI…" style="flex:1;min-width:150px" oninput="renderRecords()">
+      <select id="recFileType" onchange="renderRecords()"><option value="">Any file type</option></select>
+      <select id="recCycle" onchange="renderRecords()"><option value="">Any cycle</option></select>
+      <select id="recState" onchange="renderRecords()"><option value="">Any state</option></select>
+      <select id="recType" onchange="renderRecords()"><option value="">Any type</option></select>
+      <select id="recAnalyst" onchange="renderRecords()"><option value="">Any analyst</option></select>
+      <label style="font-size:.82rem;display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap"><span id="recDpSw" class="sw" onclick="recDp=!recDp;this.classList.toggle('on',recDp)"></span>Deep (AI)</label>
+    </div>
+    <div class="flex items-center gap-2 mb-2" style="flex-wrap:wrap">
+      <div id="recMeta" style="font-size:.82rem;color:var(--muted)"></div>
+      <button class="btn" id="runSelBtn" onclick="runSelected()" style="margin-left:auto">Run selected</button>
+      <button class="btn btn-ghost" onclick="runFiltered()">Run all filtered</button>
+      <button class="btn btn-ghost" id="expBtn" onclick="exportAuditCsv()" style="display:none"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Export</button>
+    </div>
+    <div id="loading" class="card p-4 mb-3 hidden">
+      <div class="flex items-center gap-3 mb-2"><span class="spin"></span><span style="font-weight:600" id="loadingMsg">Auditing…</span></div>
+      <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px">Did you know</div>
+      <div id="fact" class="fact"></div>
+    </div>
+    <div class="card overflow-hidden"><table id="recTable"></table></div>
+    <div id="flags" class="mt-4 space-y-2"></div>
+  </section>
+
+  <section id="dash" class="hidden">
+    <div class="flex items-center justify-between mb-4">
+      <div id="dashMeta" style="font-size:.85rem;color:var(--muted)">History of everything caught for this client.</div>
+      <div class="flex gap-2">
+        <button class="btn btn-ghost" onclick="exportHistory()"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Export history</button>
+        <button class="btn" id="pipeBtn" onclick="runPipeline()">Run Pipeline · all PSV-complete</button></div>
+    </div>
+    <div id="dashBody" class="grid gap-4" style="grid-template-columns:1fr 1fr"></div>
+  </section>
+  <section id="rules" class="hidden">
+    <div style="font-weight:700;font-size:1.05rem;margin-bottom:2px">Settings</div>
+    <div style="color:var(--muted);font-size:.85rem;margin-bottom:14px">Rule configuration — enable or disable checks per client.</div>
+    <div class="card p-4 mb-4">
+      <div style="font-weight:600;margin-bottom:2px">Client guidelines</div>
+      <div style="color:var(--muted);font-size:.82rem;margin-bottom:10px">Update the guidelines doc link, then sync — AI re-reads it and regenerates this client's rules (custom rules & toggles are kept).</div>
+      <div class="flex gap-2">
+        <input id="guideUrl" class="flex-1" placeholder="https://docs.google.com/document/d/…">
+        <button class="btn" id="syncBtn" onclick="syncGuidelines()">Sync rules from guidelines</button></div>
+      <div id="guideMsg" style="font-size:.83rem;margin-top:10px"></div>
+    </div>
+    <div class="card p-4 mb-4">
+      <div style="font-weight:600;margin-bottom:10px">Add a rule</div>
+      <div class="flex gap-2 mb-2" style="flex-wrap:wrap;align-items:center">
+        <select id="ruleElement" onchange="loadElementFields()" style="min-width:160px"></select>
+        <select id="ruleField" style="min-width:180px"><option value="">field…</option></select>
+        <select id="ruleCond" onchange="condChanged()" style="min-width:200px">
+          <option value="empty">is missing / empty</option>
+          <option value="flag_if_one_of">value is one of…</option>
+          <option value="must_be_one_of">value must be one of…</option>
+          <option value="expired">is expired (date)</option>
+          <option value="future_date">is a future date</option>
+          <option value="not_verified">is not verified</option>
+        </select>
+        <input id="ruleVal" placeholder="value(s), comma-separated" style="min-width:190px;display:none">
+        <button class="btn" onclick="addStructured()">Add</button>
+      </div>
+      <div style="font-size:.8rem;color:var(--muted);margin:10px 0 6px">…or describe it in plain English:</div>
+      <div class="flex gap-2">
+        <input id="newRule" class="flex-1" placeholder="e.g. Flag if a state license is not verified within 90 days">
+        <button class="btn" id="addRuleBtn" onclick="addRule()">Generate &amp; add</button></div>
+      <div id="ruleSuggest" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+      <div id="addRuleMsg" style="font-size:.83rem;margin-top:10px"></div>
+    </div>
+    <div class="card p-3 mb-3" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="rfSearch" placeholder="Search rules…" style="flex:1;min-width:180px" oninput="renderRulesList()">
+      <select id="rfElement" onchange="renderRulesList()" style="min-width:150px"><option value="">All elements</option></select>
+      <select id="rfSev" onchange="renderRulesList()" style="min-width:130px"><option value="">All severities</option><option>error</option><option>warning</option><option>info</option></select>
+      <select id="rfStatus" onchange="renderRulesList()" style="min-width:130px"><option value="">On &amp; off</option><option value="on">Enabled</option><option value="off">Disabled</option></select>
+      <button class="btn btn-ghost" onclick="expandAll(true)">Expand</button>
+      <button class="btn btn-ghost" onclick="expandAll(false)">Collapse</button>
+    </div>
+    <div id="rulesBody" class="space-y-4"></div>
+  </section>
+</div>
+
+<!-- provider element-level checklist -->
+<div id="detailModal" style="position:fixed;inset:0;background:#00000066;display:none;align-items:center;justify-content:center;z-index:100" onclick="if(event.target===this)closeDetail()">
+  <div class="card" style="width:660px;max-width:94vw;max-height:85vh;overflow:auto;padding:24px;position:relative">
+    <span onclick="closeDetail()" style="position:absolute;top:18px;right:20px;cursor:pointer;color:var(--muted)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
+    <div id="detailBody"></div>
+  </div>
+</div>
+
+<!-- notification center -->
+<div id="notifPanel" class="card" style="position:fixed;top:60px;right:24px;width:370px;max-width:92vw;max-height:72vh;overflow:auto;display:none;z-index:95;box-shadow:0 16px 48px #00000026">
+  <div style="padding:.75rem 1rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--card)">
+    <div style="font-weight:600">Notifications</div>
+    <span onclick="markAllRead()" style="cursor:pointer;color:var(--teal-d);font-size:.78rem">Mark all read</span></div>
+  <div id="notifList"></div>
+</div>
+
+<!-- floating guideline help-bot -->
+<button id="botFab" onclick="toggleBot()" title="Guideline help-bot"
+  style="position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:var(--teal);color:#fff;box-shadow:0 8px 24px #0d948866;z-index:90;border:0;cursor:pointer;display:flex;align-items:center;justify-content:center"><span id="fabIc"></span></button>
+<div id="botPanel" class="card" style="position:fixed;bottom:92px;right:24px;width:390px;max-width:92vw;height:72vh;display:none;flex-direction:column;z-index:90;box-shadow:0 16px 48px #00000026">
+  <div style="padding:.85rem 1.1rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
+    <div style="font-weight:600">Guideline Help-Bot</div><span id="closeIc" onclick="toggleBot()" style="cursor:pointer;color:var(--muted)"></span></div>
+  <div id="chat" style="flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px"></div>
+  <div id="suggest" style="padding:0 12px 4px;display:flex;gap:6px;flex-wrap:wrap"></div>
+  <div class="flex gap-2 p-3" style="border-top:1px solid var(--line)">
+    <input id="q" class="flex-1" placeholder="Ask about this client's guidelines…" onkeydown="if(event.key==='Enter')askBot()">
+    <button class="btn" onclick="askBot()">Send</button></div>
+</div>
+
+<script>
+let ORG=null, FACTS=[], dp=false, factTimer=null, LAST=null, SORT={key:null,dir:1};
+const $=id=>document.getElementById(id);
+const ICONS={
+  bell:'<path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 003.4 0"/>',
+  moon:'<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>',
+  msg:'<path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>',
+  download:'<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  star:'<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" fill="currentColor" stroke="none"/>',
+  x:'<path d="M18 6L6 18M6 6l12 12"/>', check:'<path d="M20 6L9 17l-5-5"/>', search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  trash:'<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/><path d="M10 11v6M14 11v6"/>'};
+function ic(n,s=18){return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle">${ICONS[n]||''}</svg>`;}
+function paintIcons(){$('logoIc').innerHTML=ic('check',18);$('bellIc').innerHTML=ic('bell',18);
+  $('modeBtn').innerHTML=ic(document.body.classList.contains('dark')?'sun':'moon',18);$('fabIc').innerHTML=ic('msg',24);$('closeIc').innerHTML=ic('x',18);}
+function enhanceSelect(sel){
+  if(sel.dataset.enh)return;sel.dataset.enh='1';
+  const wrap=document.createElement('div');wrap.className='xsel';
+  if(sel.classList.contains('w-full')||sel.classList.contains('flex-1'))wrap.style.width='100%';
+  if(sel.style.minWidth)wrap.style.minWidth=sel.style.minWidth;
+  if(sel.style.width&&sel.style.width!=='100%')wrap.style.width=sel.style.width;
+  sel.parentNode.insertBefore(wrap,sel);wrap.appendChild(sel);sel.style.display='none';
+  const btn=document.createElement('button');btn.type='button';btn.className='xsel-btn';
+  const menu=document.createElement('div');menu.className='xsel-menu';menu.style.display='none';
+  wrap.appendChild(btn);wrap.appendChild(menu);
+  const lbl=()=>{const o=sel.options[sel.selectedIndex];return o?o.textContent:'';};
+  const render=()=>{btn.innerHTML=`<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${lbl()||'—'}</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>`;};
+  btn.onclick=e=>{e.stopPropagation();const open=menu.style.display==='block';document.querySelectorAll('.xsel-menu').forEach(m=>m.style.display='none');
+    if(!open){menu.innerHTML=[...sel.options].map((o,i)=>`<div class="xsel-opt${i===sel.selectedIndex?' sel':''}" data-i="${i}"><span>${o.textContent}</span>${i===sel.selectedIndex?'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>':''}</div>`).join('');menu.style.display='block';}};
+  menu.onclick=e=>{const o=e.target.closest('.xsel-opt');if(!o)return;sel.selectedIndex=+o.dataset.i;render();menu.style.display='none';sel.dispatchEvent(new Event('change'));};
+  render();new MutationObserver(render).observe(sel,{childList:true});
+}
+function enhanceAll(){document.querySelectorAll('select').forEach(enhanceSelect);}
+const sevCol=s=>s==='error'?'var(--err)':s==='warning'?'var(--warn)':'var(--teal-d)';
+function toggleMode(){const d=document.body.classList.toggle('dark');localStorage.credcheckDark=d?'1':'';$('modeBtn').textContent=d?'☀':'🌙';}
+if(localStorage.credcheckDark){document.body.classList.add('dark');}
+function show(t){['run','dash','rules'].forEach(s=>$(s).classList.toggle('hidden',s!==t));
+  document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('active',e.dataset.t===t));
+  if(t==='run')loadRecords(); if(t==='dash')loadDash(); if(t==='rules')loadRules();}
+let RECORDS=[],recDp=false,LASTMAP={};
+function _fillSel(id,vals){const cur=$(id).value,first=$(id).options[0].outerHTML;
+  $(id).innerHTML=first+vals.map(v=>`<option>${v}</option>`).join('');$(id).value=cur;}
+async function loadRecords(){$('recMeta').innerHTML='<span class="spin"></span> loading files…';$('recTable').innerHTML='';
+  RECORDS=await (await fetch('/api/records?org='+ORG)).json();
+  const uniq=(k,split)=>{const s=new Set();RECORDS.forEach(r=>{(split?String(r[k]||'').split(/[,;/]/):[r[k]]).forEach(v=>{v=(v||'').trim();if(v)s.add(v);});});return [...s].sort();};
+  _fillSel('recFileType',uniq('fileType'));_fillSel('recCycle',uniq('cycle'));_fillSel('recState',uniq('states',true));_fillSel('recType',uniq('type'));_fillSel('recAnalyst',uniq('responsible'));
+  renderRecords();}
+function recFiltered(){const q=$('recSearch').value.toLowerCase(),ft=$('recFileType').value,cy=$('recCycle').value,st=$('recState').value,tp=$('recType').value,an=$('recAnalyst').value;
+  return RECORDS.filter(r=>(!ft||r.fileType===ft)&&(!cy||r.cycle===cy)&&(!st||String(r.states||'').includes(st))&&(!tp||r.type===tp)&&(!an||r.responsible===an)&&(!q||`${r.provider} ${r.npi}`.toLowerCase().includes(q)));}
+function statusChip(wid){const s=LASTMAP[wid];return s?`<span class="chip c-${s.status}">${s.status}</span>`:'<span style="color:var(--muted)">—</span>';}
+function renderRecords(){const fr=recFiltered();
+  $('recMeta').textContent=`${fr.length} of ${RECORDS.length} files${fr.length>300?' (showing first 300)':''}`;
+  $('recTable').innerHTML='<tr><th style="width:26px"><input type="checkbox" onchange="document.querySelectorAll(\'.recCk\').forEach(c=>c.checked=this.checked)"></th><th>Provider</th><th>NPI</th><th>Type</th><th>File type</th><th>Cycle</th><th>States</th><th>Analyst</th><th>Status</th><th></th></tr>'+
+    fr.slice(0,300).map(r=>`<tr><td><input type="checkbox" class="recCk" value="${r.npi}"></td>
+    <td><a onclick="auditFile('${r.workflowId}','${r.npi}')" style="font-weight:600;color:var(--teal-d);cursor:pointer">${r.provider}</a></td>
+    <td>${r.npi}</td><td>${r.type||''}</td><td>${r.fileType||''}</td><td>${r.cycle||''}</td><td>${r.states||''}</td><td>${r.responsible||''}</td>
+    <td>${statusChip(r.workflowId)}</td>
+    <td><button class="btn btn-ghost" style="padding:.35rem .8rem" onclick="auditFile('${r.workflowId}','${r.npi}')">Run</button></td></tr>`).join('');}
+function runSelected(){const npis=[...document.querySelectorAll('.recCk:checked')].map(c=>c.value);
+  if(!npis.length){$('recMeta').innerHTML='<span style="color:var(--warn)">Tick at least one file first.</span>';return;}runAuditSet(npis);}
+function runFiltered(){runAuditSet(recFiltered().slice(0,300).map(r=>r.npi));}
+async function auditFile(wid,npi){await runAuditSet([npi]);openDetail(wid);}
+async function runAuditSet(npis){if(!npis.length)return;
+  $('loading').classList.remove('hidden');$('loadingMsg').textContent=`Auditing ${npis.length} file(s)${recDp?' — loading application via AI':''}…`;startFacts();
+  try{const s=await (await fetch('/api/audit-async',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,npis:npis.join(','),deepPacket:recDp})})).json();
+    if(s.error){$('flags').innerHTML=`<div class="card p-4" style="color:var(--warn)">${s.error}</div>`;return;}
+    const jid=s.jobId;pollJobs();
+    const res=await new Promise(rz=>{const iv=setInterval(async()=>{try{const js=await (await fetch('/api/jobs')).json();const j=(js||[]).find(x=>x.id===jid);
+      if(j&&j.status!=='running'){clearInterval(iv);pollJobs();rz(await (await fetch('/api/job-result/'+jid)).json());}}catch(e){}},1500);});
+    if(res.error){$('flags').innerHTML='<div class="card p-4" style="color:var(--err)">Error: '+res.error+'</div>';return;}
+    LAST=res;(res.summary||[]).forEach(x=>LASTMAP[x.workflowId]=x);
+    $('expBtn').style.display='';renderRecords();renderRunFlags(res);
+  }catch(e){$('flags').innerHTML='<div class="card p-4">Error: '+e+'</div>';}
+  finally{$('loading').classList.add('hidden');stopFacts();}}
+function renderRunFlags(res){const byWf={};(res.flags||[]).forEach(f=>(byWf[f.workflowId]=byWf[f.workflowId]||[]).push(f));
+  $('flags').innerHTML=`<div style="font-size:.85rem;color:var(--muted);margin-bottom:6px"><b>${res.client}</b> · ${(res.summary||[]).length} provider(s) · ${(res.flags||[]).length} flags · click a provider for the element checklist</div>`+
+    Object.entries(byWf).map(([wf,fl])=>{const p=(res.summary||[]).find(s=>s.workflowId===wf)||{};
+    return `<div class="card p-4"><div style="font-weight:600" class="mb-2"><a onclick="openDetail('${wf}')" style="color:var(--teal-d);cursor:pointer">${p.provider||wf}</a> <span style="color:var(--muted);font-weight:400">${p.npi||''}</span></div>`+
+      fl.slice(0,40).map(f=>`<div class="py-1" style="font-size:.86rem"><span class="dot" style="background:${sevCol(f.severity)}"></span><span class="sev-${f.severity}" style="font-weight:600">${f.severity}</span> <span style="color:var(--muted)">· ${f.category||f.flagClass}${f.state?' · '+f.state:''}</span> — ${f.message}</div>`).join('')+
+      (fl.length>40?`<div style="color:var(--muted);font-size:.8rem">+${fl.length-40} more…</div>`:'')+`</div>`;}).join('');}
+function toggleBot(){const p=$('botPanel'),open=p.style.display==='flex';p.style.display=open?'none':'flex';
+  if(!open&&!$('chat').children.length)bubble('bot',"Hi! Ask me anything about this client's credentialing guidelines.");}
+let CLIENTS=[];
+const SUGG=['How many days is the attestation valid?','What malpractice coverage is required in FL?',
+  'Is work history required at recredentialing?','Which sanctions do we screen?'];
+async function init(){paintIcons();enhanceAll();
+  let cs=await (await fetch('/api/clients')).json();
+  cs.sort((a,b)=>(b.hasOverlay?1:0)-(a.hasOverlay?1:0)||b.count-a.count);
+  CLIENTS=cs; if(cs[0])pickClient(cs[0].orgId,cs[0].name);
+  pollJobs(); setInterval(pollJobs,2500);}
+function toggleClientMenu(e){e.stopPropagation();const m=$('clientMenu'),open=m.style.display==='block';
+  document.querySelectorAll('.xsel-menu').forEach(x=>x.style.display='none');
+  if(!open){m.style.display='block';$('clientSearch').value='';filterClients();setTimeout(()=>$('clientSearch').focus(),0);}}
+function filterClients(){const q=$('clientSearch').value.trim().toLowerCase();
+  let list=q?CLIENTS.filter(c=>c.name.toLowerCase().includes(q)):CLIENTS;list=list.slice(0,100);
+  $('clientList').innerHTML=list.map(c=>`<div class="xsel-opt" onclick="pickClient('${c.orgId}',this.dataset.l)" data-l="${c.name.replace(/"/g,'')}">
+    <span style="display:flex;align-items:center;gap:8px">${c.hasOverlay?`<span style="color:#eab308;display:inline-flex">${ic('star',13)}</span>`:''}${c.name}</span>
+    <span style="color:var(--muted);font-size:.8rem">${c.count}</span></div>`).join('')||'<div style="padding:.6rem;color:var(--muted)">no match</div>';}
+function pickClient(orgId,label){ORG=orgId;$('clientBtnLabel').textContent=label;$('clientMenu').style.display='none';onClient();}
+document.addEventListener('click',e=>{if(!e.target.closest('.xsel'))document.querySelectorAll('.xsel-menu').forEach(m=>m.style.display='none');});
+let READ=new Set(JSON.parse(localStorage.veridianRead||'[]')), JOBSCACHE=[];
+async function pollJobs(){try{JOBSCACHE=await (await fetch('/api/jobs')).json()||[];}catch(e){return;} renderNotif();}
+function unreadCount(){return JOBSCACHE.filter(j=>!READ.has(j.id+j.status)).length;}
+function renderNotif(){const n=unreadCount();const b=$('notifBadge');b.textContent=n||'';b.style.display=n?'flex':'none';
+  const run=JOBSCACHE.some(j=>j.status==='running');$('bellBtn').style.color=run?'var(--teal-d)':'';
+  if($('notifPanel').style.display==='block')drawNotif();}
+function drawNotif(){const dark=document.body.classList.contains('dark');
+  if(!JOBSCACHE.length){$('notifList').innerHTML='<div style="padding:18px;color:var(--muted);font-size:.85rem">No audits run yet.</div>';return;}
+  $('notifList').innerHTML=JOBSCACHE.map(j=>{const read=READ.has(j.id+j.status);
+    const c=j.status==='running'?'var(--teal)':j.status==='failed'?'var(--err)':'var(--ok)';
+    const det=j.total&&j.status==='running';
+    return `<div style="padding:.7rem 1rem;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start;${read?'':'background:'+(dark?'#14b8a614':'#0d94880a')}">
+      <span style="width:9px;height:9px;border-radius:50%;background:${c};margin-top:5px;flex:0 0 auto;${j.status==='running'?'animation:pulse 1.1s infinite':''}"></span>
+      <div style="flex:1;font-size:.83rem">
+        <div style="font-weight:${read?'400':'600'}">${j.type==='pipeline'?'Pipeline':'Audit'} · ${j.client||j.org}</div>
+        <div style="color:var(--muted);font-size:.75rem;margin-top:1px">${j.status}${det?` · ${j.processed}/${j.total}`:''} · ${j.elapsedSec}s${j.status==='done'?` · ${j.flags} flags`:''}${j.note?' · '+j.note:''}</div>
+        <div style="margin-top:4px;display:flex;gap:12px;font-size:.73rem">
+          ${j.status==='done'?`<a href="/api/jobs/${j.id}/export.csv" style="color:var(--teal-d);display:inline-flex;align-items:center;gap:4px">${ic('download',13)}export</a>`:''}
+          <span onclick="markRead('${j.id}${j.status}',${read?'false':'true'})" style="cursor:pointer;color:var(--muted)">${read?'mark unread':'mark read'}</span>
+        </div></div></div>`;}).join('');}
+function toggleNotif(){const p=$('notifPanel'),open=p.style.display==='block';p.style.display=open?'none':'block';if(!open)drawNotif();}
+function markRead(k,read){read?READ.add(k):READ.delete(k);localStorage.veridianRead=JSON.stringify([...READ]);renderNotif();drawNotif();}
+function markAllRead(){JOBSCACHE.forEach(j=>READ.add(j.id+j.status));localStorage.veridianRead=JSON.stringify([...READ]);renderNotif();drawNotif();}
+async function onClient(){LAST=null;LASTMAP={};
+  $('chat')&&($('chat').innerHTML='');
+  $('suggest')&&($('suggest').innerHTML=SUGG.map(s=>`<span onclick="askBot(this.dataset.q)" data-q="${s}" class="chip" style="background:var(--field);border:1px solid var(--line);cursor:pointer;color:var(--teal-d)">${s}</span>`).join(''));
+  $('flags').innerHTML='';$('dashBody').innerHTML='';$('rulesBody').innerHTML='';$('expBtn')&&($('expBtn').style.display='none');
+  fetch('/api/clientfacts?org='+ORG).then(r=>r.json()).then(cf=>{FACTS=cf.facts||[];}).catch(()=>{});
+  loadRecords();}
+function startFacts(){if(!FACTS.length){$('fact').textContent='Running the client\'s rule set…';return;}
+  let i=0;$('fact').textContent=FACTS[0];
+  factTimer=setInterval(()=>{i=(i+1)%FACTS.length;$('fact').style.opacity=0;
+    setTimeout(()=>{$('fact').textContent=FACTS[i];$('fact').style.opacity=1;},200);},2800);}
+function stopFacts(){clearInterval(factTimer);}
+
+async function runAudit(){
+  $('runBtn').disabled=true;$('loading').classList.remove('hidden');$('summaryWrap').classList.add('hidden');
+  $('resultsTools').classList.add('hidden');$('flags').innerHTML='';startFacts();
+  try{
+    const s=await (await fetch('/api/audit-async',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({org:ORG,npis:$('npis').value,assignedTo:$('analyst').value,deepPacket:dp})})).json();
+    if(s.error){$('flags').innerHTML=`<div class="card p-4" style="color:var(--warn)">${s.error}</div>`;return;}
+    const jid=s.jobId;pollJobs();
+    const res=await new Promise(resolve=>{const iv=setInterval(async()=>{
+      try{const js=await (await fetch('/api/jobs')).json();const j=(js||[]).find(x=>x.id===jid);
+        if(j&&j.status!=='running'){clearInterval(iv);pollJobs();resolve(await (await fetch('/api/job-result/'+jid)).json());}}
+      catch(e){}},1500);});
+    if(res.error){$('flags').innerHTML='<div class="card p-4" style="color:var(--err)">Error: '+res.error+'</div>';return;}
+    if(res.note&&!(res.summary&&res.summary.length)){$('flags').innerHTML=`<div class="card p-4" style="color:var(--muted)">${res.note}</div>`;return;}
+    LAST=res;SORT={key:null,dir:1};$('resultsTools').classList.remove('hidden');renderResults();
+  }catch(e){$('flags').innerHTML='<div class="card p-4">Error: '+e+'</div>';}
+  finally{$('runBtn').disabled=false;$('loading').classList.add('hidden');stopFacts();}
+}
+const ALL_ELEMENTS=['demographics','stateLicenses','dea','boardCertifications','malpractice','specialties','educationTraining','workHistory','npdb','sanctions','licensureActions','hospitalAffiliation'];
+function closeDetail(){$('detailModal').style.display='none';}
+function openDetail(wid){if(!LAST)return;const p=LAST.summary.find(s=>s.workflowId===wid)||{};
+  const byEl={};LAST.flags.filter(f=>f.workflowId===wid).forEach(f=>(byEl[f.element]=byEl[f.element]||[]).push(f));
+  const rows=ALL_ELEMENTS.map(el=>{const efs=byEl[el]||[];
+    const worst=efs.some(f=>f.severity==='error')?'error':efs.some(f=>f.severity==='warning')?'warning':efs.length?'info':'ok';
+    const col=worst==='error'?'var(--err)':worst==='warning'?'var(--warn)':worst==='info'?'var(--teal-d)':'var(--ok)';
+    return `<div style="padding:.7rem .1rem;border-bottom:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="width:22px;height:22px;border-radius:50%;background:${col};color:#fff;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto">${worst==='ok'?ic('check',14):ic('x',14)}</span>
+        <span style="font-weight:600">${el}</span>
+        <span style="margin-left:auto;font-size:.72rem;color:${col};font-weight:700">${worst==='ok'?'PASS':worst.toUpperCase()}</span></div>`+
+      efs.map(f=>`<div style="margin-left:32px;margin-top:5px;font-size:.82rem"><b>Found:</b> ${f.message}${f.expected?`<div style="color:var(--muted);font-size:.78rem">↳ Guideline: ${f.expected}</div>`:''}</div>`).join('')+`</div>`;}).join('');
+  $('detailBody').innerHTML=`<div style="font-weight:700;font-size:1.1rem">${p.provider||wid}</div>
+    <div style="color:var(--muted);font-size:.82rem;margin-bottom:6px">NPI ${p.npi||''} · ${p.type||''} · ${p.states||''} · audit confidence ${p.auditConfidence??''}</div>
+    <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:8px 0">Platform vs application — element checks</div>${rows}`;
+  $('detailModal').style.display='flex';}
+function sortBy(k){SORT.dir=(SORT.key===k)?-SORT.dir:1;SORT.key=k;renderResults();}
+function renderResults(){
+  if(!LAST)return;const q=$('fSearch').value.toLowerCase(),st=$('fStatus').value,sv=$('fSev').value;
+  let sum=LAST.summary.filter(s=>(!st||s.status===st)&&(!q||`${s.provider} ${s.npi} ${s.responsible||''}`.toLowerCase().includes(q)));
+  if(SORT.key){const k=SORT.key;sum=[...sum].sort((a,b)=>{let x=a[k]??'',y=b[k]??'';
+    if(typeof x==='number'&&typeof y==='number')return (x-y)*SORT.dir; return (''+x).localeCompare(''+y)*SORT.dir;});}
+  const arrow=k=>SORT.key===k?(SORT.dir>0?' ▲':' ▼'):'';
+  const cols=[['provider','Provider'],['npi','NPI'],['type','Type'],['states','States'],['responsible','Analyst'],['auditConfidence','Conf.'],['errors','Errors'],['flags','Flags'],['status','Status']];
+  $('summaryWrap').classList.remove('hidden');
+  $('summary').innerHTML='<tr>'+cols.map(c=>`<th onclick="sortBy('${c[0]}')">${c[1]}${arrow(c[0])}</th>`).join('')+'</tr>'+
+    sum.map(s=>`<tr><td><a onclick="openDetail('${s.workflowId}')" style="font-weight:600;color:var(--teal-d);cursor:pointer">${s.provider}</a></td><td>${s.npi}</td><td>${s.type}</td><td>${s.states||''}</td>
+    <td>${s.responsible||''}</td><td>${s.auditConfidence??''}</td><td>${s.errors}</td><td>${s.flags}</td>
+    <td><span class="chip c-${s.status}">${s.status}</span></td></tr>`).join('');
+  const wf=new Set(sum.map(s=>s.workflowId));
+  let flags=LAST.flags.filter(f=>wf.has(f.workflowId)&&(!sv||f.severity===sv)&&(!q||JSON.stringify(f).toLowerCase().includes(q)));
+  $('runStatus').innerHTML=`<b>${LAST.client}</b> · ${sum.length} providers · ${flags.length} flags`;
+  const byWf={};flags.forEach(f=>(byWf[f.workflowId]=byWf[f.workflowId]||[]).push(f));
+  $('flags').innerHTML=Object.entries(byWf).map(([w,fl])=>{const p=LAST.summary.find(s=>s.workflowId===w)||{};
+    return `<div class="card p-4"><div style="font-weight:600" class="mb-2">${p.provider||w} <span style="color:var(--muted);font-weight:400">${p.npi||''}</span></div>`+
+      fl.map(f=>`<div class="py-1" style="font-size:.86rem">
+      <div><span class="dot" style="background:${sevCol(f.severity)}"></span>
+      <span class="sev-${f.severity}" style="font-weight:600">${f.severity}</span>
+      <span style="color:var(--muted)">· ${f.category||f.flagClass}${f.state?' · '+f.state:''}</span> — <b>Found:</b> ${f.message}
+      <span style="color:var(--muted);opacity:.6">(${f.confidence})</span></div>
+      ${f.expected?`<div style="color:var(--muted);font-size:.79rem;margin-left:16px">↳ <b style="color:var(--teal-d)">Guideline:</b> ${f.expected}</div>`:''}</div>`).join('')+`</div>`;}).join('');
+}
+function exportAuditCsv(){if(!LAST)return;const sm={};LAST.summary.forEach(s=>sm[s.workflowId]=s);
+  const head=['provider','npi','type','states','analyst','status','severity','category','element','state','rule','confidence','found','guideline'];
+  const rows=LAST.flags.map(f=>{const s=sm[f.workflowId]||{};return [s.provider,s.npi,s.type,s.states,s.responsible,s.status,
+    f.severity,f.category||f.flagClass,f.element,f.state,f.rule,f.confidence,f.message,f.expected||''];});
+  const csv=[head].concat(rows).map(r=>r.map(v=>`"${(''+(v??'')).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download=`credcheck_${(LAST.client||'audit').replace(/\W+/g,'_')}.csv`;a.click();}
+function exportHistory(){window.open('/api/history.csv?org='+ORG,'_blank');}
+
+async function loadDash(){$('dashBody').innerHTML='<div style="color:var(--muted)"><span class="spin"></span> Loading history…</div>';
+  const d=await (await fetch('/api/dashboard?org='+ORG)).json();
+  $('dashMeta').innerHTML=d.totals.lastRun?`History for <b>${d.client}</b> · last run ${d.totals.lastRun}`:`No audit history yet for <b>${d.client}</b>.`;
+  if(!d.totals.totalFlags){$('dashBody').innerHTML=`<div class="card p-8" style="grid-column:1/3;text-align:center;color:var(--muted)">
+    No history yet. Click <b>Run Pipeline</b> to audit all PSV-complete files for this client — results collect here.</div>`;return;}
+  const block=(title,rows,color)=>{const max=Math.max(1,...rows.map(r=>r.count));
+    return `<div class="card p-4"><div style="font-weight:600" class="mb-3">${title}</div>`+
+      (rows.length?rows.slice(0,12).map(r=>`<div class="mb-2"><div class="flex justify-between" style="font-size:.82rem"><span>${r.key}</span><span style="color:var(--muted)">${r.count}</span></div>
+      <div class="bar" style="width:${Math.round(r.count/max*100)}%;background:${color||'var(--teal)'}"></div></div>`).join(''):'<div style="color:var(--muted);font-size:.85rem">none</div>')+`</div>`;};
+  $('dashBody').innerHTML=`<div class="card p-5" style="grid-column:1/3"><div class="flex gap-10 items-center">
+      <div><div style="font-size:1.9rem;font-weight:700">${d.totals.providersFlagged}</div><div style="color:var(--muted);font-size:.8rem">providers flagged</div></div>
+      <div><div style="font-size:1.9rem;font-weight:700;color:var(--err)">${d.totals.providersWithErrors}</div><div style="color:var(--muted);font-size:.8rem">with errors</div></div>
+      <div><div style="font-size:1.9rem;font-weight:700">${d.totals.totalFlags}</div><div style="color:var(--muted);font-size:.8rem">total flags caught</div></div>
+      <div style="flex:1;text-align:right;color:var(--muted);font-size:.9rem;font-weight:600">${d.client}</div></div></div>`+
+    block('Top errors by analyst',d.byAnalyst,'var(--err)')+block('By severity',d.bySeverity)+
+    block('By category',d.byCategory,'var(--teal-d)')+block('By rule',d.byRule);}
+async function runPipeline(){const r=await (await fetch('/api/pipeline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG})})).json();
+  if(r.error){$('dashMeta').innerHTML=`<span style="color:var(--warn)">${r.error}</span>`;return;}
+  $('dashMeta').innerHTML=`<span style="color:var(--ok);display:inline-flex;align-items:center;gap:5px">${ic('check',15)}Job started</span> — track progress in the notifications (bell, top-right). Dashboard refreshes when done.`;
+  pollJobs();const jid=r.jobId;
+  const iv=setInterval(async()=>{const js=await (await fetch('/api/jobs')).json();const j=(js||[]).find(x=>x.id===jid);
+    if(j&&j.status!=='running'){clearInterval(iv);loadDash();}},3000);}
+function cleanMsg(m){return (m||'').replace(/DATA ENTRY:|COMPLETENESS[^:]*:|NCQA:|REVIEW:|NAME MISMATCH:/g,'')
+  .replace(/\{[^}]+\}/g,'').replace(/\s{2,}/g,' ').replace(/\s+([.:,])/g,'$1').trim()||'(rule)';}
+function toggleCat(h){const b=h.nextElementSibling,open=b.style.display!=='none';
+  b.style.display=open?'none':'block';h.querySelector('.caret').style.transform=open?'':'rotate(90deg)';}
+function expandAll(o){document.querySelectorAll('#rulesBody .catbody').forEach(b=>b.style.display=o?'block':'none');
+  document.querySelectorAll('#rulesBody .caret').forEach(c=>c.style.transform=o?'rotate(90deg)':'');}
+const ELEMENTS_UI=['demographics','stateLicenses','dea','boardCertifications','malpractice','specialties','educationTraining','npdb','sanctions','licensureActions','workHistory','hospitalAffiliation'];
+const RULE_SUGG=['Flag if a state license is not verified within 90 days','Malpractice occurrence coverage must be at least 1000000','Flag if DEA status is Retired or Inactive','Board certification must not be expired','Flag if a license status is Cancelled or Suspended'];
+function condChanged(){const c=$('ruleCond').value;$('ruleVal').style.display=(c==='flag_if_one_of'||c==='must_be_one_of')?'':'none';}
+async function loadElementFields(){const el=$('ruleElement').value;if(!el){$('ruleField').innerHTML='<option value="">field…</option>';return;}
+  const cols=await (await fetch('/api/element-fields?element='+el)).json();
+  $('ruleField').innerHTML='<option value="">field…</option>'+cols.map(c=>`<option value="${c}">${c}</option>`).join('');}
+async function addStructured(){const el=$('ruleElement').value,fld=$('ruleField').value,cond=$('ruleCond').value,val=$('ruleVal').value;
+  if(!el||!fld){$('addRuleMsg').innerHTML='<span style="color:var(--warn)">Pick an element and field.</span>';return;}
+  const r=await (await fetch('/api/add-rule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,element:el,field:fld,condition:cond,value:val})})).json();
+  if(r.ok){$('addRuleMsg').innerHTML=`<span style="color:var(--ok);display:inline-flex;align-items:center;gap:4px">${ic('check',14)}Added</span> <b>${r.rule.id}</b> — ${r.rule.expected||''}`;loadRules();}
+  else $('addRuleMsg').innerHTML=`<span style="color:var(--warn)">${r.reason||'could not add'}</span>`;}
+function setupAddRule(){if(!$('ruleElement').options.length){
+    $('ruleElement').innerHTML='<option value="">element…</option>'+ELEMENTS_UI.map(e=>`<option value="${e}">${e}</option>`).join('');
+    $('ruleSuggest').innerHTML=RULE_SUGG.map(s=>`<span data-s="${s}" onclick="$('newRule').value=this.dataset.s" class="chip" style="background:var(--field);cursor:pointer;color:var(--teal-d)">${s}</span>`).join('');}}
+async function syncGuidelines(){const url=$('guideUrl').value.trim();if(!url){$('guideMsg').innerHTML='<span style="color:var(--warn)">Paste the guidelines doc URL first.</span>';return;}
+  const b=$('syncBtn');b.disabled=true;$('guideMsg').innerHTML='<span class="spin"></span> AI reading the doc and regenerating rules…';
+  try{const r=await (await fetch('/api/refresh-guidelines',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,docUrl:url})})).json();
+    if(r.ok){$('guideMsg').innerHTML=`<span style="color:var(--ok);display:inline-flex;align-items:center;gap:4px">${ic('check',14)}Synced</span> — ${r.overrides.length} params, ${r.packetChecks} packet checks. Rules reloaded.`;loadRules();}
+    else $('guideMsg').innerHTML=`<span style="color:var(--warn)">${r.reason}</span>`;
+  }catch(e){$('guideMsg').textContent='Error: '+e;}finally{b.disabled=false;}}
+async function addRule(){const t=$('newRule').value.trim();if(!t)return;const b=$('addRuleBtn');b.disabled=true;
+  $('addRuleMsg').innerHTML='<span class="spin"></span> generating…';
+  try{const r=await (await fetch('/api/add-rule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,text:t})})).json();
+    if(r.ok){$('addRuleMsg').innerHTML=`<span style="color:var(--ok);display:inline-flex;align-items:center;gap:4px">${ic('check',14)}Added</span> <b>${r.rule.id}</b> — ${r.rule.expected||r.rule.message} <span style="color:var(--muted)">(${r.rule.element} · ${r.rule.severity})</span>`;
+      $('newRule').value='';loadRules();}
+    else{$('addRuleMsg').innerHTML=`<span style="color:var(--warn)">Couldn't add:</span> ${r.reason||'unsupported'}`;}
+  }catch(e){$('addRuleMsg').textContent='Error: '+e;}finally{b.disabled=false;}}
+let RULES_CACHE={}, RULES_CLIENT='';
+async function loadRules(){$('rulesBody').innerHTML='<div style="color:var(--muted)"><span class="spin"></span> Loading…</div>';
+  setupAddRule();
+  const r=await (await fetch('/api/rules?org='+ORG)).json();
+  RULES_CACHE=r.categories;RULES_CLIENT=r.client;$('guideUrl').value=r.guidelinesUrl||'';
+  const els=[...new Set(Object.values(r.categories).flat().map(x=>x.element))].sort();
+  $('rfElement').innerHTML='<option value="">All elements</option>'+els.map(e=>`<option value="${e}">${e}</option>`).join('');
+  renderRulesList();}
+function ruleRow(rule){return `<div class="flex items-center justify-between py-2" style="border-top:1px solid var(--line);gap:14px">
+    <div><div style="font-size:.9rem;font-weight:600">${rule.label||rule.id}</div>
+    <div style="color:var(--muted);font-size:.8rem;margin-top:2px">${rule.guideline||''}</div>
+    <div style="color:var(--muted);font-size:.7rem;margin-top:2px">${rule.element} · <span class="sev-${rule.severity}">${rule.severity}</span>${rule.addedAt?' · added '+rule.addedAt:''}${rule.custom?' · custom':''}</div></div>
+    <div style="display:flex;align-items:center;gap:12px">${rule.custom?`<span onclick="event.stopPropagation();deleteRule('${rule.id}')" title="Remove rule" style="cursor:pointer;color:var(--err);display:inline-flex">${ic('trash',15)}</span>`:''}<div class="sw ${rule.enabled?'on':''}" onclick="event.stopPropagation();toggleRule('${rule.id}',this)"></div></div></div>`;}
+function renderRulesList(){
+  const q=($('rfSearch').value||'').toLowerCase(),el=$('rfElement').value,sv=$('rfSev').value,st=$('rfStatus').value;
+  const filtered=!!(q||el||sv||st);let shown=0;
+  const body=Object.entries(RULES_CACHE).map(([cat,rules])=>{
+    const fr=rules.filter(x=>(!el||x.element===el)&&(!sv||x.severity===sv)&&(!st||(st==='on'?x.enabled:!x.enabled))&&(!q||`${x.label} ${x.guideline} ${x.id} ${x.element}`.toLowerCase().includes(q)));
+    if(!fr.length)return '';shown+=fr.length;const on=fr.filter(x=>x.enabled).length;
+    return `<div class="card"><div onclick="toggleCat(this)" style="cursor:pointer;padding:.9rem 1.1rem;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:600;color:var(--teal-d)">${cat} <span style="color:var(--muted);font-weight:400;font-size:.8rem">· ${on}/${fr.length} on</span></div>
+      <span class="caret" style="color:var(--muted);transition:transform .2s;display:inline-block">▸</span></div>
+      <div class="catbody" style="display:none;padding:0 1.1rem 1rem">${fr.map(ruleRow).join('')}</div></div>`;}).join('');
+  $('rulesBody').innerHTML=`<div style="color:var(--muted);font-size:.8rem;margin:2px 0 10px">${shown} rule(s)${filtered?' match':''} · <b>${RULES_CLIENT}</b> — changes save instantly.</div>`+
+    (body||'<div style="color:var(--muted);padding:12px">No rules match — clear the filters.</div>');
+  if(filtered && shown<=50)expandAll(true);
+  else{const first=$('rulesBody').querySelector('.catbody');if(first){first.style.display='block';first.previousElementSibling.querySelector('.caret').style.transform='rotate(90deg)';}}}
+async function toggleRule(id,el){const on=!el.classList.contains('on');el.classList.toggle('on',on);
+  Object.values(RULES_CACHE).flat().forEach(r=>{if(r.id===id)r.enabled=on;});
+  await fetch('/api/rules/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,ruleId:id,enabled:on})});}
+async function deleteRule(id){if(!confirm('Remove this custom rule?'))return;
+  await fetch('/api/rules/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,ruleId:id})});
+  loadRules();}
+function bubble(who,html){const d=document.createElement('div');
+  d.style.cssText=`max-width:80%;padding:.6rem .85rem;border-radius:14px;font-size:.9rem;line-height:1.5;`+
+    (who==='user'?'align-self:flex-end;background:var(--teal);color:#fff':'align-self:flex-start;background:var(--field);border:1px solid var(--line)');
+  d.innerHTML=html;$('chat').appendChild(d);$('chat').scrollTop=$('chat').scrollHeight;return d;}
+function typeInto(el,text,meta){el.innerHTML='';let i=0;const n=Math.max(2,Math.round(text.length/70));
+  (function step(){i+=n;el.innerHTML=text.slice(0,i).replace(/\n/g,'<br>')+(i<text.length?'<span style="opacity:.4">▍</span>':'');
+    $('chat').scrollTop=$('chat').scrollHeight;
+    if(i<text.length)setTimeout(step,20);else el.innerHTML=text.replace(/\n/g,'<br>')+meta;})();}
+async function askBot(q){q=(typeof q==='string')?q:$('q').value.trim();if(!q)return;$('q').value='';
+  bubble('user',q);const load=bubble('bot','<span class="typing"><i></i><i></i><i></i></span>');
+  try{const r=await (await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,question:q})})).json();
+    const c=Math.round((r.confidence||0)*100);const col=r.escalate?'var(--warn)':'var(--ok)';
+    const meta=r.is_question?`<div class="mt-2" style="font-size:.72rem;color:var(--muted)">confidence <b style="color:${col}">${c}%</b>${r.citation?' · “'+r.citation+'”':''}</div>`:'';
+    typeInto(load,(r.answer||''),meta);
+  }catch(e){load.innerHTML='Error: '+e;}}
+init();
+</script>
+</body>
+</html>

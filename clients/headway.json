@@ -1,0 +1,126 @@
+{
+  "clientName": "Headway",
+  "orgIds": [
+    "7AYW5eIkGW0LQ94gmmgg"
+  ],
+  "_source": "Headway Credentialing Workflow Instructions (Google Doc, read 2026-07-13)",
+  "overrides": {
+    "attestation_max_age_days": 120,
+    "license_verified_within_days": 90,
+    "dea_verified_within_days": 90,
+    "board_verified_within_days": 90,
+    "sanctions_verified_within_days": 90,
+    "npdb_verified_within_days": 30,
+    "workhistory_verified_within_days": 120,
+    "license_expiring_soon_days": 20,
+    "coi_expiring_soon_days": 5,
+    "prescriber_types_client": [
+      "MD",
+      "DO",
+      "NP"
+    ],
+    "malpractice_coverage_matrix": {
+      "FL": {
+        "all": [
+          100000,
+          300000
+        ]
+      },
+      "NC": {
+        "all": [
+          1000000,
+          3000000
+        ]
+      },
+      "NJ": {
+        "all": [
+          1000000,
+          3000000
+        ]
+      },
+      "default": {
+        "prescriber": [
+          1000000,
+          3000000
+        ],
+        "nonprescriber": [
+          1000000,
+          1000000
+        ]
+      }
+    },
+    "workhistory_gap_days_by_state": {
+      "IL": 30,
+      "NC": 90,
+      "default": 180
+    },
+    "cds_required_states": [
+      "AL",
+      "CT",
+      "DE",
+      "DC",
+      "GU",
+      "HI",
+      "ID",
+      "IL",
+      "IN",
+      "IA",
+      "LA",
+      "MD",
+      "MA",
+      "MI",
+      "MO",
+      "NV",
+      "NJ",
+      "NM",
+      "OK",
+      "PR",
+      "RI",
+      "SC",
+      "SD",
+      "UT",
+      "WY"
+    ]
+  },
+  "requiredElements": {
+    "*": [
+      "stateLicenses",
+      "malpractice",
+      "specialties",
+      "workHistory"
+    ],
+    "prescriber": [
+      "dea",
+      "boardCertifications"
+    ],
+    "recredExclude": [
+      "educationTraining",
+      "workHistory"
+    ],
+    "recredWorkHistoryStates": [
+      "TX",
+      "OK",
+      "MT",
+      "NM",
+      "IL"
+    ]
+  },
+  "_notesRequiringPacket": [
+    "CAQH state-of-interest application present; demographics/name match vs CAQH",
+    "COI must be Certificate/Memorandum (not declaration page); provider named as owner/employee not just cert-holder; Type of Insurance = Professional Liability",
+    "Board specialty = Psychiatry-Mental Health; non-board-certified MD/DO need completed Psychiatry residency (AMA)",
+    "License copy name/number/type match; no Associate/provisional licenses"
+  ],
+  "customRules": [],
+  "disabledRules": [
+    "SPECIALTIES_IS_PRIMARY_MISSING",
+    "SPECIALTIES_NAME_MISSING",
+    "SPECIALTIES_SOURCE_MISSING",
+    "SPECIALTIES_SPECIALTY_BOARD_NAME_MISSING",
+    "SPECIALTIES_SPECIALTY_NUCC_TAXONOMY_CODE_MISSING",
+    "SPECIALTIES_SUB_SPECIALTIES_ARRAY_MISSING",
+    "SPECIALTIES_SUB_SPECIALTIES_MISSING",
+    "SPECIALTY_NAME_MISSING",
+    "SPECIALTY_VERIFIED_IN_FUTURE"
+  ]
+}
