@@ -163,6 +163,11 @@ def _persist_overlay(c, org):
         _CFG_CACHE[oid] = o
     return ts
 
+def _gap_map(org):
+    """Client's per-state work-history gap thresholds (days), or None for the NCQA default."""
+    c = find_client(org)
+    return (c["overlay"].get("workhistory_gap_days_by_state") if c else None)
+
 def find_client(org):
     for c in client_files():
         if org in c["orgIds"]:
@@ -356,7 +361,7 @@ def deep_packet_audit(wfs, master, jid=None):
                     pf["severity"] = _sevmap.get(pf.get("severity"), pf.get("severity"))
                     flags.append(pf)
             if full is not None:
-                flags += caqh_audit.caqh_audit(m, path, packet=full)
+                flags += caqh_audit.caqh_audit(m, path, packet=full, gap_days_by_state=_gap_map(org))
                 appl_by_wf[wid] = caqh_audit.applicability(full)
                 flags += caqh_audit.assertion_flags(m, full)
                 flags += caqh_audit.demographic_flags(m, full)
@@ -506,10 +511,66 @@ def delete_rule(rq: DeleteRuleReq):
 
 class AuditReq(BaseModel):
     org: str; npis: str = ""; assignedTo: str = ""; limit: int = 200; deepPacket: bool = False
+    scope: str = "full"   # "full" or "education" (E&T-only fast run)
 JOB_FULL = {}  # jobId -> full audit result (summary+flags) for async retrieval
 
-def do_audit(org, npis, assignedTo, limit, deep, jid=None):
+def _education_only_run(org, npis, assignedTo, limit, jid=None):
+    """Fast, scoped run: Education & Training only (one targeted read per file, no packet/CAQH/rules)."""
+    wfs = audit.resolve_workflows(org, npis or None, limit=limit)
+    if assignedTo:
+        k = assignedTo.lower(); wfs = [w for w in wfs if k in (w["responsible"] or "").lower()]
+    client = audit.fetch_org_names({org}).get(org, org)
+    if jid: JOBS[jid]["client"] = client; JOBS[jid]["total"] = len(wfs)
+    if not wfs: return {"client": client, "summary": [], "flags": [], "note": "no matching PSV-complete workflows"}
+    master = master_record.build_master(wfs)
+    wf_by_id = {w["workflowId"]: w for w in wfs}
+    os.makedirs(PACKETS, exist_ok=True)
+    flags = []; prog_lock = threading.Lock(); done = [0]
+    def run_one(m):
+        t0 = time.perf_counter(); wid = m["workflowId"]; org2 = wf_by_id[wid].get("org") or org
+        f, note = [], None
+        try:
+            edu = get_extraction(wid, "education")
+            if edu is None:
+                path = os.path.join(PACKETS, f"{wid}.pdf")
+                if not os.path.exists(path): download_packet(wid, org2, path)
+                edu = education_audit.extract_education(path)
+                record_extraction(org2, org2, wid, m.get("npi"), "education", edu)
+            f = education_audit.education_audit(m, None, packet=edu)
+        except Exception as e:
+            note = {"workflowId": wid, "error": f"education: {type(e).__name__}: {str(e)[:150]}"}
+        return m, f, note, round(time.perf_counter() - t0, 1)
+    notes = []
+    with ThreadPoolExecutor(max_workers=DEEP_CONCURRENCY) as ex:
+        for fut in as_completed([ex.submit(run_one, m) for m in master]):
+            m, f, note, sec = fut.result(); flags += f
+            if note: notes.append(note)
+            dem = m.get("demographics") or {}
+            with prog_lock:
+                done[0] += 1
+                if jid:
+                    JOBS[jid]["processed"] = done[0]
+                    JOBS[jid].setdefault("timings", []).append({
+                        "provider": f'{dem.get("firstName", "")} {dem.get("lastName", "")}'.strip() or m["workflowId"],
+                        "wid": m["workflowId"], "sec": sec,
+                        "errors": sum(1 for x in f if x.get("severity") == "error")})
+    by = {}
+    for x in flags: by.setdefault(x["workflowId"], []).append(x)
+    summary = []
+    for w in wfs:
+        fl = by.get(w["workflowId"], []); errs = sum(1 for x in fl if x["severity"] == "error")
+        summary.append({"provider": f'{w["first"]} {w["last"]}', "npi": w["npi"], "type": w["type"],
+            "states": w.get("states"), "responsible": w.get("responsible"), "auditConfidence": None,
+            "errors": errs, "flags": len(fl),
+            "status": "REVIEW" if errs else ("CHECK" if fl else "CLEAN"), "workflowId": w["workflowId"]})
+    rows = record_history(org, client, summary, flags, run_mode="education")
+    return {"client": client, "summary": summary, "flags": flags, "packetNotes": notes,
+            "master": master if len(master) <= 30 else None, "_rows": rows}
+
+def do_audit(org, npis, assignedTo, limit, deep, jid=None, scope="full"):
     """Shared audit: resolve -> master -> rules (+deep) -> summary + flags + history rows."""
+    if scope == "education":
+        return _education_only_run(org, npis, assignedTo, limit, jid)
     deep = True  # AI extraction (documents + applications) is always on
     wfs, master, flags, conf = core_audit(org, npis or None, assignedTo, limit)
     client = audit.fetch_org_names({org}).get(org, org)
@@ -558,7 +619,7 @@ def _audit_worker(jid, a):
     j = JOBS[jid]
     try:
         npis = [n.strip() for n in a.npis.replace("\n", ",").split(",") if n.strip()]
-        res = do_audit(a.org, npis, a.assignedTo, a.limit, a.deepPacket, jid)
+        res = do_audit(a.org, npis, a.assignedTo, a.limit, a.deepPacket, jid, scope=a.scope)
         JOB_RESULTS[jid] = res.pop("_rows", [])
         JOB_FULL[jid] = res
         j.update(status="done", flags=len(res.get("flags", [])),
@@ -652,7 +713,7 @@ def caqh_insight(org: str, npi: str):
         if caqh is None:
             if not os.path.exists(path): download_packet(wid, org, path)
             caqh = caqh_audit.extract_caqh_full(path)   # ALL CAQH elements + supporting-doc presence
-        flags = caqh_audit.caqh_audit(m, path, packet=caqh) if m else []
+        flags = caqh_audit.caqh_audit(m, path, packet=caqh, gap_days_by_state=_gap_map(org)) if m else []
         pkt = get_extraction(wid, "packet")   # supporting-document read (reuse audit's read)
         if pkt is None:
             if not os.path.exists(path): download_packet(wid, org, path)

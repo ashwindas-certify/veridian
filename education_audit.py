@@ -22,9 +22,10 @@ client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 
 PROMPT = """You are auditing the Education & Training material inside a credentialing
 Primary Source Verification (PSV) packet PDF. Look at the CAQH application's
-education/training section AND any AMA physician profile pages (which list medical
-school, residency, and fellowship training). Extract ONLY what is actually present
-in the document, as JSON with this shape:
+education/training section, any CAQH SUPPLEMENT / ADDENDUM / "additional information"
+pages (education & training is sometimes continued on supplement pages), AND any AMA
+physician profile pages (which list medical school, residency, and fellowship
+training). Extract ONLY what is actually present in the document, as JSON with this shape:
 {
  "education": [
    {"type","institution","specialty","start_date","end_date","status"}

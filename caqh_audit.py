@@ -9,7 +9,7 @@ actually verified. This reads the CAQH application pages with Gemini on Vertex
   * packet shows work history but platform workHistory is empty,
   * an info summary so reviewers can see the check ran."""
 import argparse, json, os, re, sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from google import genai
 from google.genai import types
@@ -20,10 +20,11 @@ client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 GAP_THRESHOLD_DAYS = 180
 
 PROMPT = """You are auditing the CAQH application inside a credentialing Primary
-Source Verification (PSV) packet PDF. Focus ONLY on the CAQH application pages
-(the provider's self-reported work / employment history and any disclosed gaps
-in employment). Extract ONLY what is actually present in the document, as JSON
-with this shape:
+Source Verification (PSV) packet PDF. Focus on the CAQH application pages AND any
+CAQH SUPPLEMENT / ADDENDUM / "additional information" pages (work history and gaps
+are sometimes continued on supplement pages — include those). Read the provider's
+self-reported work / employment history and any disclosed gaps in employment.
+Extract ONLY what is actually present in the document, as JSON with this shape:
 {
  "work_history": [
    {"employer","role","start_date","end_date","is_current"}
@@ -104,6 +105,31 @@ def fmt(dt):
     return dt.strftime("%Y-%m") if dt else "?"
 
 
+def _midx(dt):
+    """Month index (year*12 + month) for month/year gap arithmetic."""
+    return dt.year * 12 + dt.month
+
+
+def _gap_months(prev_end, next_start):
+    """Months strictly BETWEEN two dates, month/year granularity per SOP: count the month after the
+    previous end through the month before the next start. 12/2023 -> 6/2024 = 5 (Jan–May 2024)."""
+    return _midx(next_start) - _midx(prev_end) - 1
+
+
+def _oldest_active_license_issue(master_record):
+    """Issue date of the OLDEST active state license (fallback window start when the provider has
+    <5y of healthcare work history). Unknown status is treated as active."""
+    dates = []
+    for lic in master_record.get("stateLicenses") or []:
+        status = str(lic.get("license_status") or lic.get("status") or "").lower()
+        if status and "active" not in status:   # skip clearly-inactive/expired/lapsed
+            continue
+        d = parse_date(lic.get("issue_date"))
+        if d:
+            dates.append(d)
+    return min(dates) if dates else None
+
+
 # ---------------------------------------------------------------- flag helper
 
 def _flag(record, packet, rule, severity, confidence, message):
@@ -169,9 +195,11 @@ def _says_favourable(explanation):
 
 # ---------------------------------------------------------------- entry point
 
-def caqh_audit(master_record, pdf_path, packet=None):
+def caqh_audit(master_record, pdf_path, packet=None, gap_days_by_state=None):
     """Extract the CAQH work history from the packet and return work-history flags.
-    Pass ``packet`` (e.g. an extract_caqh_full result) to reuse an existing read."""
+    Pass ``packet`` (e.g. an extract_caqh_full result) to reuse an existing read.
+    ``gap_days_by_state`` is the client's per-state gap threshold in days (Headway IL 30 / NC 90 /
+    default 180) used to size the employment-gap look-back per the SOP."""
     packet = packet if packet is not None else extract_caqh(pdf_path)
     work_history = packet.get("work_history") or []
     gaps_disclosed = packet.get("gaps_disclosed") or []
@@ -195,38 +223,73 @@ def caqh_audit(master_record, pdf_path, packet=None):
         file=sys.stderr,
     )
 
-    # Build sortable employment periods with parsed dates.
+    # ---- Employment-gap review per SOP (month/year granularity) ----
+    # Look back 5 years for a gap >= the client threshold (months). If the provider does NOT have
+    # 5 years of healthcare work history, start the look-back at the OLDEST ACTIVE license issue date
+    # (capped at the last 5 years). A gap with a disclosed explanation -> "found with explanation"
+    # (info); an unexplained gap -> "explanation required" (error). Gaps below threshold or outside
+    # the window -> "No Employment Gap Found" (not flagged).
+    ASOF = datetime.now()
+    window_5y = datetime(ASOF.year - 5, ASOF.month, 1)
+    demo = master_record.get("demographics") or {}
+    assigned = _parse_states(demo.get("assignedStates") or demo.get("states"))
+    by_state = gap_days_by_state or {"default": GAP_THRESHOLD_DAYS}
+    cand = [by_state[s] for s in assigned if s in by_state] or [by_state.get("default", GAP_THRESHOLD_DAYS)]
+    threshold_days = min(cand) if cand else GAP_THRESHOLD_DAYS
+    threshold_months = max(1, round(threshold_days / 30.0))
+
     periods = []
     for wh in work_history:
         start = parse_date(wh.get("start_date"))
-        end = None if wh.get("is_current") else parse_date(wh.get("end_date"), end=True)
-        periods.append({"start": start, "end": end, "is_current": wh.get("is_current"), "raw": wh})
-    dated = [p for p in periods if p["start"] is not None]
-    dated.sort(key=lambda p: p["start"])
+        end = ASOF if wh.get("is_current") else parse_date(wh.get("end_date"), end=True)
+        periods.append({"start": start, "end": end or ASOF, "raw": wh})
+    dated = sorted((p for p in periods if p["start"] is not None), key=lambda p: p["start"])
 
-    # 1) Unexplained gaps > 180 days between consecutive employment periods.
+    earliest_emp = dated[0]["start"] if dated else None
+    if earliest_emp and earliest_emp <= window_5y:
+        window_start, basis = window_5y, "last 5 years"
+    else:
+        lic = _oldest_active_license_issue(master_record)
+        if lic:
+            window_start = max(lic, window_5y)          # cap the look-back at 5 years
+            basis = (f"since oldest active license issued {fmt(lic)}" if lic >= window_5y
+                     else f"last 5 years (oldest active license {fmt(lic)})")
+        else:
+            window_start, basis = (earliest_emp or window_5y), "last 5 years"
+
+    # Walk the timeline; measure each uncovered stretch inside the window in whole months.
     unexplained_gaps = []  # (gap_days, gap_start, gap_end, prev_employer, cur_employer)
-    for i in range(1, len(dated)):
-        prev, cur = dated[i - 1], dated[i]
-        prev_end = prev["end"]
-        if prev_end is None:  # prev is still current -> overlapping, no gap
-            continue
-        gap_days = (cur["start"] - prev_end).days
-        if gap_days > GAP_THRESHOLD_DAYS:
-            gap_start, gap_end = prev_end, cur["start"]
-            if not _disclosed_covers(gap_start, gap_end, gaps_disclosed):
-                unexplained_gaps.append((
-                    gap_days, gap_start, gap_end,
-                    prev["raw"].get("employer"), cur["raw"].get("employer"),
-                ))
-                flags.append(_flag(
-                    master_record, packet,
-                    "CAQH_WORKHISTORY_GAP_UNEXPLAINED", "error", 0.7,
-                    f"CAQH work history shows an unexplained employment gap of "
-                    f"{gap_days} days ({fmt(gap_start)} to {fmt(gap_end)}), between "
-                    f"'{prev['raw'].get('employer')}' and '{cur['raw'].get('employer')}', "
-                    f"with no matching explained gap disclosed on the application.",
-                ))
+    def _consider_gap(prev_end, next_start, prev_emp, next_emp):
+        if next_start <= window_start:            # gap entirely before the review window -> ignore
+            return
+        gs = max(prev_end, window_start)
+        gap_months = _gap_months(gs, next_start)
+        if gap_months < threshold_months:
+            return                                # below threshold -> No Employment Gap Found
+        explained = _disclosed_covers(gs, next_start, gaps_disclosed)
+        span = f"{fmt(gs)} to {fmt(next_start)} (~{gap_months} mo)"
+        between = f" between '{prev_emp}' and '{next_emp}'" if (prev_emp or next_emp) else ""
+        if explained:
+            flags.append(_flag(
+                master_record, packet, "CAQH_WORKHISTORY_GAP_EXPLAINED", "info", 0.8,
+                f"Employment Gap Found WITH Explanation — {span}{between}, within the {basis}; "
+                f"the provider disclosed an explanation on the application."))
+        else:
+            unexplained_gaps.append(((next_start - gs).days, gs, next_start, prev_emp, next_emp))
+            flags.append(_flag(
+                master_record, packet, "CAQH_WORKHISTORY_GAP_UNEXPLAINED", "error", 0.72,
+                f"Employment Gap Found — EXPLANATION REQUIRED — {span}{between}, within the {basis}, "
+                f"with no explanation disclosed on the application."))
+
+    cursor, prev_emp = window_start, None
+    for p in dated:
+        if p["start"] > cursor:
+            _consider_gap(cursor, p["start"], prev_emp, p["raw"].get("employer"))
+        if p["end"] > cursor:
+            cursor = p["end"]
+        prev_emp = p["raw"].get("employer")
+    if cursor < ASOF:                              # trailing gap up to today (not currently employed)
+        _consider_gap(cursor, ASOF, prev_emp, "present")
 
     # 2) Packet shows work history but platform verified work history is empty.
     backend_wh = master_record.get("workHistory") or []
@@ -291,7 +354,9 @@ def caqh_audit(master_record, pdf_path, packet=None):
 # ---------------------------------------------------------------- full CAQH read
 
 FULL_PROMPT = """You are auditing a credentialing Primary Source Verification (PSV)
-packet PDF. Read the CAQH application AND the supporting-document/attachment pages.
+packet PDF. Read the CAQH application, any CAQH SUPPLEMENT / ADDENDUM / "additional
+information" pages (work history and education/training are sometimes continued on
+supplement pages — include them), AND the supporting-document/attachment pages.
 Extract ONLY what is actually present, as JSON with EXACTLY this shape:
 {
  "demographics": {"first_name","last_name","npi","caqh_id","dob","gender","provider_type","phone","email","address"},

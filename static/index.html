@@ -106,7 +106,8 @@
     </div>
     <div class="flex items-center gap-2 mb-2" style="flex-wrap:wrap">
       <div id="recMeta" style="font-size:.82rem;color:var(--muted)"></div>
-      <button class="btn" id="runSelBtn" onclick="runSelected()" style="margin-left:auto">Run selected</button>
+      <button class="btn" id="runSelBtn" onclick="runSelected()" style="margin-left:auto">Run full audit</button>
+      <button class="btn btn-ghost" onclick="runSelected('education')" title="Education &amp; Training only — one targeted read per file, much faster">Run E&amp;T only</button>
       <button class="btn btn-ghost" onclick="runFiltered()">Run all filtered</button>
       <button class="btn btn-ghost" id="expBtn" onclick="exportAuditCsv()" style="display:none"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Export</button>
     </div>
@@ -208,6 +209,9 @@
 <script>
 let ORG=null, FACTS=[], dp=true, factTimer=null, LAST=null, SORT={key:null,dir:1};   // AI extraction always on
 const $=id=>document.getElementById(id);
+let _clampId=0;
+function clamp(t,n=180){t=t==null?'':String(t);if(t.length<=n)return t;const id='cl'+(_clampId++);
+  return `${t.slice(0,n)}… <a href="#" onclick="var e=$('${id}');e.style.display=e.style.display==='none'?'inline':'none';this.textContent=this.textContent==='details'?'less':'details';return false" style="color:var(--teal-d)">details</a><span id="${id}" style="display:none">${t.slice(n)}</span>`;}
 const ICONS={
   bell:'<path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 003.4 0"/>',
   moon:'<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>',
@@ -272,13 +276,13 @@ function renderRecords(){const fr=recFiltered();
     <td>${r.npi}</td><td>${r.type||''}</td><td>${r.fileType||''}</td><td>${r.cycle||''}</td><td>${r.states||''}</td><td>${r.responsible||''}</td>
     <td>${statusChip(r.workflowId)}</td>
     <td><button class="btn btn-ghost" style="padding:.35rem .8rem" onclick="auditFile('${r.workflowId}','${r.npi}')">Run</button></td></tr>`).join('');}
-function runSelected(){const npis=[...document.querySelectorAll('.recCk:checked')].map(c=>c.value);
-  if(!npis.length){$('recMeta').innerHTML='<span style="color:var(--warn)">Tick at least one file first.</span>';return;}runAuditSet(npis);}
-function runFiltered(){runAuditSet(recFiltered().slice(0,300).map(r=>r.npi));}
+function runSelected(scope){const npis=[...document.querySelectorAll('.recCk:checked')].map(c=>c.value);
+  if(!npis.length){$('recMeta').innerHTML='<span style="color:var(--warn)">Tick at least one file first.</span>';return;}runAuditSet(npis,scope);}
+function runFiltered(scope){runAuditSet(recFiltered().slice(0,300).map(r=>r.npi),scope);}
 async function auditFile(wid,npi){await runAuditSet([npi]);openDetail(wid);}
-async function runAuditSet(npis){if(!npis.length)return;
-  $('loading').classList.remove('hidden');$('loadingMsg').textContent=`Auditing ${npis.length} file(s)…`;
-  try{const s=await (await fetch('/api/audit-async',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,npis:npis.join(','),deepPacket:recDp})})).json();
+async function runAuditSet(npis,scope){if(!npis.length)return;scope=scope||'full';
+  $('loading').classList.remove('hidden');$('loadingMsg').textContent=`${scope==='education'?'E&T audit':'Auditing'} ${npis.length} file(s)…`;
+  try{const s=await (await fetch('/api/audit-async',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,npis:npis.join(','),deepPacket:recDp,scope})})).json();
     if(s.error){$('flags').innerHTML=`<div class="card p-4" style="color:var(--warn)">${s.error}</div>`;return;}
     const jid=s.jobId;pollJobs();
     const res=await new Promise(rz=>{const iv=setInterval(async()=>{try{const js=await (await fetch('/api/jobs')).json();const j=(js||[]).find(x=>x.id===jid);
@@ -395,7 +399,7 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
     const col=worst==='error'?'var(--err)':worst==='warning'?'var(--warn)':worst==='info'?'var(--teal-d)':'var(--ok)';
     const label=worst==='ok'?'PASS':worst.toUpperCase();
     const detail=efs.length
-      ? efs.map(f=>`<div style="margin-bottom:3px"><b>Found:</b> ${f.message}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${f.expected}</div>`:''}</div>`).join('')
+      ? efs.map(f=>`<div style="margin-bottom:3px"><b>Found:</b> ${clamp(f.message,200)}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${clamp(f.expected,160)}</div>`:''}</div>`).join('')
       : `<span style="color:var(--muted)">✓ Verified — ${elemSummary(m,el)}</span>`;
     return `<tr style="border-bottom:1px solid var(--line)">
       <td style="padding:.5rem 8px .5rem 0;vertical-align:top;white-space:nowrap">${elDot(worst)} <span style="font-weight:600;text-transform:capitalize">${el}</span></td>
@@ -403,7 +407,7 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
       <td style="vertical-align:top;padding:.5rem 0;font-size:.82rem">${detail}</td></tr>`;}).join('');
   const pflags=(LAST.flags||[]).filter(f=>f.workflowId===wid);
   const bySev={error:[],warning:[],info:[]};pflags.forEach(f=>(bySev[f.severity]||bySev.info).push(f));
-  const errGrp=(sev,color,lbl)=>bySev[sev].length?`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:${color};margin:12px 0 4px">${lbl} (${bySev[sev].length})</div>`+bySev[sev].map(f=>`<div style="border-bottom:1px solid var(--line);padding:.45rem 0;font-size:.83rem"><b style="text-transform:capitalize">${f.element||'—'}</b>${f.state?' · '+f.state:''} — ${f.message}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${f.expected}</div>`:''}</div>`).join(''):'';
+  const errGrp=(sev,color,lbl)=>bySev[sev].length?`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:${color};margin:12px 0 4px">${lbl} (${bySev[sev].length})</div>`+bySev[sev].map(f=>`<div style="border-bottom:1px solid var(--line);padding:.45rem 0;font-size:.83rem"><b style="text-transform:capitalize">${f.element||'—'}</b>${f.state?' · '+f.state:''} — ${clamp(f.message,200)}${f.expected?`<div style="color:var(--muted);font-size:.76rem">↳ Guideline: ${clamp(f.expected,160)}</div>`:''}</div>`).join(''):'';
   const errBody=pflags.length?(errGrp('error','var(--err)','Errors')+errGrp('warning','var(--warn)','Warnings')+errGrp('info','var(--muted)','Info')):'<div style="color:var(--ok);padding:1rem 0">✓ No findings — this provider passed all active checks.</div>';
   const nerr=bySev.error.length,nwarn=bySev.warning.length;
   $('detailBody').innerHTML=`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="font-weight:700;font-size:1.1rem">${p.provider||wid}</div>
@@ -478,7 +482,7 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <td style="vertical-align:top;padding-top:.45rem;text-align:center">${e.docRequired?_mchk(e.docPresent,'','missing'):(e.docPresent===null?'<span style="color:var(--line)">n/a</span>':(e.docPresent?'<span style="color:var(--ok)">✓</span>':'—'))}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.datesNote}">${_mchk(e.datesOk)}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.activeNote}">${e.activeOk===true?'<span style="color:var(--ok)">active</span>':e.activeOk===false?'<span style="color:var(--err)">expired</span>':'<span style="color:var(--line)">n/a</span>'}</td>
-      <td style="vertical-align:top;padding:.45rem 0;font-size:.76rem;color:${e.findings&&e.findings.length?'var(--err)':'var(--muted)'}">${e.findings&&e.findings.length?e.findings.map(f=>'• '+f).join('<br>'):'—'}</td></tr>`;
+      <td style="vertical-align:top;padding:.45rem 0;font-size:.76rem;color:${e.findings&&e.findings.length?'var(--err)':'var(--muted)'}">${e.findings&&e.findings.length?e.findings.map(f=>'• '+clamp(f,140)).join('<br>'):'—'}</td></tr>`;
       const detail=exp?`<tr id="mi${i}" style="display:none;background:var(--field)"><td colspan="10" style="padding:.4rem .6rem .5rem 20px">
         <table style="width:100%;border-collapse:collapse"><tr style="color:var(--muted);font-size:.68rem;text-transform:uppercase;text-align:left"><th>Entry</th><th>Verified</th><th>Source</th><th>Active</th><th>Value</th><th>Dates</th></tr>${its.map(itemRow).join('')}</table></td></tr>`:'';
       return head+detail;}).join('');
