@@ -89,7 +89,14 @@ def date_not_future(row, r, c):
     d = parse_date(row.get(r["field"])); return d is None or d <= ASOF
 def verified(row, r, c): return bool(str(row.get("verified_at") or "").strip())
 def name_matches(row, r, c):
-    rn = norm_name(row.get("last_name")); return (not rn) or rn == c["last"]
+    rn = norm_name(row.get("last_name"))
+    if not rn or rn == c["last"]:
+        return True
+    # tolerant of compound / partial surnames (e.g. "Campos Beuter" vs "Beuter"):
+    # match if one surname's word-tokens are a subset of the other's.
+    rt = {t for t in re.split(r"[^a-z]+", rn) if t}
+    pt = {t for t in re.split(r"[^a-z]+", c["last"] or "") if t}
+    return bool(rt and pt and (rt <= pt or pt <= rt))
 def value_in_ok(row, r, c):
     """Pass (no flag) if field value is one of the 'clean' outcomes; flag = a real hit."""
     return (row.get(r["field"]) or "").strip() in r["ok_values"]
@@ -295,7 +302,7 @@ def required_for(ptype, cycle=None, states=None):
     # recredentialing: some elements (education/training, work history) are not re-verified,
     # except work history is still required at recred for certain states (Headway: TX/OK/MT/NM/IL)
     if cycle and "recred" in str(cycle).lower():
-        exclude = set(REQ.get("recredExclude", ["educationTraining"]))
+        exclude = set(REQ.get("recredExclude", ["educationTraining", "workHistory"]))
         wh_states = set(REQ.get("recredWorkHistoryStates", []))
         if "workHistory" in exclude and states and (set(states) & wh_states):
             exclude.discard("workHistory")
@@ -305,6 +312,7 @@ def required_for(ptype, cycle=None, states=None):
 def evaluate(master):
     """Run the rule catalog over a list of master records. Returns (flags, prov_conf)."""
     flags = []; prov_conf = {}
+    _cur = set()   # (workflowId, element, state) that have a CURRENT (non-expired) record
     for m in master:
         dem = m["demographics"]
         ctx = {"last": norm_name(dem["lastName"]), "first": norm_name(dem["firstName"]), "master": m}
@@ -312,6 +320,15 @@ def evaluate(master):
                 "org": m["org"], "npi": dem["npi"], "providerType": dem["providerType"]}
         deduped = {el: dedup(el, m.get(el, [])) for el in DEDUP_KEYS}
         deduped["demographics"] = [dem]  # single-row element so demographics rules can run
+
+        # note which elements/states have a CURRENT (non-expired) record, so an old historical
+        # record that has expired doesn't get flagged when a valid current one exists.
+        for _el in ("stateLicenses", "dea", "malpractice", "boardCertifications"):
+            for _r in deduped.get(_el, []):
+                _d = parse_date(_r.get("expiration_date"))
+                if _d and _d >= ASOF:
+                    _cur.add((m["workflowId"], _el, (_r.get("state") or "").upper()))
+                    _cur.add((m["workflowId"], _el, ""))
 
         seen = set()  # collapse identical data-entry flags repeated across rows
         def add(element, rule_id, sev, msg, conf, who="(n/a)", when="", state="", expected=""):
@@ -435,6 +452,14 @@ def evaluate(master):
                           "name-mismatch" if "NAME_MISMATCH" in r else
                           "data-entry" if ("ACTIVE_BUT_EXPIRED" in r or "FUTURE" in r or "AFTER" in r) else
                           "validity")
+    # drop "expired" flags on historical records when a current (non-expired) record exists
+    _EXP_ELEM = {"STATE_LICENSE_NOT_EXPIRED": "stateLicenses", "STATE_LICENSE_ACTIVE_BUT_EXPIRED": "stateLicenses",
+                 "DEA_NOT_EXPIRED": "dea", "DEA_ACTIVE_BUT_EXPIRED": "dea",
+                 "MALPRACTICE_NOT_EXPIRED": "malpractice", "MALPRACTICE_ACTIVE_BUT_EXPIRED": "malpractice",
+                 "BOARD_CERT_NOT_EXPIRED": "boardCertifications"}
+    flags = [f for f in flags if not (f.get("rule") in _EXP_ELEM and (
+        (f["workflowId"], _EXP_ELEM[f["rule"]], (f.get("state") or "").upper()) in _cur
+        or (f["workflowId"], _EXP_ELEM[f["rule"]], "") in _cur))]
     return flags, prov_conf
 
 def main():
