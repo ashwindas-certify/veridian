@@ -1091,8 +1091,7 @@ def element_matrix(master, packet, full, required_set, doc_rows=None, flags=None
                       else "differs: " + ", ".join(it["label"] for it in items if it.get("datesOk") is False))
 
         findings = _findings_for(label, flags)
-        err_findings = any(f.get("severity") == "error" for f in (flags or [])
-                           if label in _finding_labels_for(f))
+        err_findings = _has_error_finding(label, flags)
         if expected_missing:
             status = "error"          # required element absent everywhere
         elif active_ok is False:
