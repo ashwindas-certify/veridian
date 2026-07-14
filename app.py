@@ -2,7 +2,7 @@
 """PSV Audit web app: client selector, audit runner, per-client rule config, help-bot.
 Run:  cd ~/Downloads/psv_audit && python -m uvicorn app:app --port 8000
 """
-import os, json, glob, urllib.request, threading, uuid, time
+import os, json, glob, urllib.request, urllib.error, re, threading, uuid, time
 from collections import Counter
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -106,7 +106,7 @@ def read_history(org=None):
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import io, csv as _csv
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
@@ -203,6 +203,23 @@ def _collapse_license_flags(flags):
             for f in sorted(fs, key=lambda x: _LIC_EXPIRY_PRI[x["rule"]])[1:]:
                 drop.add(id(f))
     return [f for f in flags if id(f) not in drop]
+
+_USER_NAME_CACHE = {}
+def _resolve_user_names(ids):
+    """Map CertifyOS user ids -> 'First Last' (from appdb_data.users), cached."""
+    want = {i for i in ids if i}
+    miss = [i for i in want if i not in _USER_NAME_CACHE]
+    if miss:
+        try:
+            inlist = ",".join("'%s'" % i.replace("'", "") for i in miss)
+            for r in master_record._client.query(
+                f"SELECT document_id, first_name, last_name FROM "
+                f"`certifyos-production-platform.appdb_data.users` WHERE document_id IN ({inlist})").result():
+                nm = " ".join(x for x in (r["first_name"], r["last_name"]) if x).strip()
+                _USER_NAME_CACHE[r["document_id"]] = nm or r["document_id"]
+        except Exception as e:
+            print("[warn] user-name resolve failed:", str(e)[:100])
+    return {i: _USER_NAME_CACHE.get(i, i) for i in want}
 
 def _gap_map(org):
     """Client's per-state work-history gap thresholds (days), or None for the NCQA default."""
@@ -334,12 +351,54 @@ def core_audit(org, npis=None, assignedTo="", limit=200):
         flags, conf = reconcile.evaluate(master)
     return wfs, master, flags, conf
 
+AUTH_FILE = ".auth.json"      # gitignored: {"email","password"} for auto-login
+_TOKEN = {"v": None}          # cached CertifyOS auth token (refreshed on expiry)
+
+def _login():
+    """Log in with stored credentials -> fresh auth_token (cookie); cache + mirror to .token."""
+    creds = json.load(open(AUTH_FILE, encoding="utf-8"))
+    body = json.dumps({"email": creds["email"], "password": creds["password"]}).encode()
+    req = urllib.request.Request(f"{NG_API}/auth-tokens", data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        cookie = r.headers.get("Set-Cookie") or ""
+    m = re.search(r"auth_token=([^;]+)", cookie)
+    if not m:
+        raise RuntimeError("login succeeded but no auth_token cookie returned")
+    _TOKEN["v"] = m.group(1)
+    try: open(".token", "w", encoding="utf-8").write(_TOKEN["v"])   # so other modules pick it up
+    except Exception: pass
+    return _TOKEN["v"]
+
+def get_token(force=False):
+    """Current CertifyOS token: cache -> .token -> fresh login. force=True re-logs in."""
+    if force:
+        return _login()
+    if _TOKEN["v"]:
+        return _TOKEN["v"]
+    try:
+        t = open(".token", encoding="utf-8").read().strip()
+        if t:
+            _TOKEN["v"] = t; return t
+    except Exception:
+        pass
+    return _login()
+
+def authed_open(url, org=None, timeout=60, _retried=False):
+    """Open an ng-api URL with the current token; on 401/403, re-login once and retry."""
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + get_token(),
+                                               "organization-id": org or ""})
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403) and not _retried:
+            get_token(force=True)
+            return authed_open(url, org, timeout, _retried=True)
+        raise
+
 def download_packet(wid, org, path):
     """Fetch the PSV packet PDF for a workflow via psvFileSignedUrl (see download_packets.py)."""
-    token = open(".token", encoding="utf-8").read().strip()
-    req = urllib.request.Request(f"{NG_API}/credentialing-workflows/{wid}",
-        headers={"Authorization": "Bearer " + token, "organization-id": org or ""})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with authed_open(f"{NG_API}/credentialing-workflows/{wid}", org, timeout=60) as r:
         wf = json.load(r)
     signed = wf.get("psvFileSignedUrl")
     if not signed:
@@ -694,15 +753,26 @@ def run_audit_async(a: AuditReq):
 def job_result(jid: str):
     return JOB_FULL.get(jid, {"pending": True})
 
+@app.get("/api/document-url")
+def document_url(org: str, providerId: str, docId: str):
+    """Fetch a supporting document's signed URL (ng-api) and redirect to it, so a reviewer can open
+    the exact document behind an element's check. Proxied because the API needs an org header."""
+    try:
+        with authed_open(f"{NG_API}/v2/provider/{providerId}/supporting-documents/{docId}/signed-url",
+                         org, timeout=30) as r:
+            url = r.read().decode("utf-8", "replace").strip().strip('"')
+        if url.startswith("http"):
+            return RedirectResponse(url)
+        return JSONResponse({"ok": False, "reason": "This document has no uploaded file to open."}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"ok": False, "reason": f"{type(e).__name__}: {str(e)[:150]}"}, status_code=502)
+
 @app.get("/api/packet-url")
 def packet_url(org: str, wid: str):
     """Fetch the (short-lived) signed PSV packet URL for a workflow so a reviewer can open/download
     the actual packet. Fetched on demand because signed URLs expire quickly."""
     try:
-        token = open(".token", encoding="utf-8").read().strip()
-        req = urllib.request.Request(f"{NG_API}/credentialing-workflows/{wid}",
-            headers={"Authorization": "Bearer " + token, "organization-id": org or ""})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with authed_open(f"{NG_API}/credentialing-workflows/{wid}", org, timeout=60) as r:
             wf = json.load(r)
         url = wf.get("psvFileSignedUrl")
         if not url:
@@ -776,6 +846,10 @@ def caqh_insight(org: str, npi: str):
         flags += caqh_audit.demographic_flags(m, caqh)
         threeWay = caqh_audit.three_way_compare(m, pkt, caqh)
         matrix = caqh_audit.element_matrix(m, pkt, caqh, required, docRows, flags)
+        _names = _resolve_user_names([d.get("verifiedBy") for row in matrix for d in row.get("docsUsed", [])])
+        for row in matrix:
+            for d in row.get("docsUsed", []):
+                if d.get("verifiedBy"): d["verifiedBy"] = _names.get(d["verifiedBy"], d["verifiedBy"])
     except Exception as e:
         return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
     record_extraction(org, org, wid, npi, "caqh", caqh)  # persist what AI read from the app

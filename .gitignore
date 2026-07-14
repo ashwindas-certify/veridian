@@ -1,5 +1,7 @@
 # secrets & credentials — NEVER commit
 .token
+.auth.json
+.auth
 *.json.key
 create-*.json
 *service-account*.json

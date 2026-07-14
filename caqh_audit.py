@@ -534,11 +534,20 @@ def element_documents(master):
         cats = _doc_cats(txt)
         if not cats:
             continue
-        info = {"name": (row.get("document_name") or row.get("original_file_name")
-                         or row.get("sub_collection_name") or "document"),
-                "url": row.get("file_url") or "",
+        # document_name is a Firestore path; the human label lives in file_type / original_file_name
+        ftype = str(row.get("file_type") or "")
+        ofn = str(row.get("original_file_name") or "")
+        looks_file = ofn.lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".doc", ".docx"))
+        if ftype and ftype.lower() != "pdf":
+            name = ftype
+        elif looks_file:
+            name = ofn
+        else:
+            name = "document"
+        info = {"name": name, "providerId": row.get("provider_id") or "",
+                "docId": row.get("document_id") or "",
                 "verifiedAt": _date10(row.get("verified_at")),
-                "verifiedBy": row.get("verified_by") or "",
+                "verifiedBy": row.get("verified_by") or "",   # user id — resolved to a name in app
                 "status": row.get("document_status_name") or "",
                 "state": row.get("state") or row.get("state_id_name") or ""}
         for c in cats:

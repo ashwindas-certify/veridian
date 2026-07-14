@@ -353,6 +353,13 @@ function drawNotif(){const dark=document.body.classList.contains('dark');
           <span onclick="markRead('${j.id}${j.status}',${read?'false':'true'})" style="cursor:pointer;color:var(--muted)">${read?'mark unread':'mark read'}</span>
         </div></div></div>`;}).join('');}
 function toggleNotif(){const p=$('notifPanel'),open=p.style.display==='block';p.style.display=open?'none':'block';if(!open)drawNotif();}
+// click anywhere outside the notification panel closes it
+document.addEventListener('click',e=>{const p=$('notifPanel');
+  if(p&&p.style.display==='block'&&!e.target.closest('#notifPanel')&&!e.target.closest('#bellBtn'))p.style.display='none';});
+// Esc closes the open panel / detail view
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){
+  const np=$('notifPanel');if(np&&np.style.display==='block')np.style.display='none';
+  const dm=$('detailModal');if(dm&&dm.style.display==='flex')dm.style.display='none';}});
 function markRead(k,read){read?READ.add(k):READ.delete(k);localStorage.veridianRead=JSON.stringify([...READ]);renderNotif();drawNotif();}
 function markAllRead(){JOBSCACHE.forEach(j=>READ.add(j.id+j.status));localStorage.veridianRead=JSON.stringify([...READ]);renderNotif();drawNotif();}
 async function onClient(){LAST=null;LASTMAP={};
@@ -425,7 +432,6 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
       <button class="dtab on" data-t="matrix" onclick="detailTab('matrix','${p.npi}')">Verification matrix</button>
       <button class="dtab" data-t="errors" onclick="detailTab('errors','${p.npi}')">Error summary${nerr||nwarn?` <span style="color:${nerr?'var(--err)':'var(--warn)'}">(${nerr+nwarn})</span>`:''}</button>
       <button class="dtab" data-t="elem" onclick="detailTab('elem','${p.npi}')">Element checks</button>
-      <button class="dtab" data-t="edu" onclick="detailTab('edu','${p.npi}')">E&amp;T insight (AI)</button>
       <button class="dtab" data-t="caqh" onclick="detailTab('caqh','${p.npi}')">CAQH insight (AI)</button></div>
     <div id="dpane-matrix" class="dpane"><div id="matrixBox"></div></div>
     <div id="dpane-errors" class="dpane" style="display:none">
@@ -433,8 +439,7 @@ function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.wo
     <div id="dpane-elem" class="dpane" style="display:none">
       <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:0 0 8px">Platform vs application — element checks</div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Status</th><th>Finding</th></tr>${rows}</table></div>
-    <div id="dpane-edu" class="dpane" style="display:none"><div id="eduInsightBox"></div></div>
-    <div id="dpane-caqh" class="dpane" style="display:none"><div id="caqhInsightBox"></div></div>`;
+    <div id="dpane-caqh" class="dpane" style="display:none"><div id="caqhInsightBox"></div><div id="eduInsightBox" style="margin-top:12px"></div></div>`;
   $('detailModal').style.display='flex';
   matrixTab(p.npi);}
 function detailTab(t,npi){
@@ -442,8 +447,7 @@ function detailTab(t,npi){
   document.querySelectorAll('#detailBody .dpane').forEach(p=>p.style.display='none');
   $('dpane-'+t).style.display='';
   if(t==='matrix'&&!$('matrixBox').dataset.loaded){$('matrixBox').dataset.loaded='1';matrixTab(npi);}
-  if(t==='edu'&&!$('eduInsightBox').dataset.loaded){$('eduInsightBox').dataset.loaded='1';eduInsight(npi);}
-  if(t==='caqh'&&!$('caqhInsightBox').dataset.loaded){$('caqhInsightBox').dataset.loaded='1';caqhInsight(npi);}}
+  if(t==='caqh'&&!$('caqhInsightBox').dataset.loaded){$('caqhInsightBox').dataset.loaded='1';caqhInsight(npi);eduInsight(npi);}}
 let CAQHCACHE={};
 async function getCaqh(npi){if(CAQHCACHE[npi])return CAQHCACHE[npi];
   const r=await (await fetch(`/api/caqh-insight?org=${ORG}&npi=${npi}`)).json();CAQHCACHE[npi]=r;return r;}
@@ -478,7 +482,7 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <td style="text-align:center">${it.active===true?'<span style="color:var(--ok)">active</span>':it.active===false?'<span style="color:var(--err)">expired</span>':'—'}${it.expiration?' <span style="color:var(--muted)">'+it.expiration+'</span>':''}</td>
       <td style="text-align:center">${itcell(it.valueOk)}</td>
       <td style="text-align:center">${itcell(it.datesOk)}</td></tr>`;
-    const docRow=d=>`<tr style="font-size:.75rem"><td style="padding:.2rem 0">${d.name||'document'}</td><td style="text-align:center">${d.verifiedAt?'<span style="color:var(--ok)">✓ '+d.verifiedAt+'</span>':'<span style="color:var(--warn)">not verified</span>'}</td><td style="color:var(--muted)">${d.verifiedBy||'—'}</td><td>${d.status||'—'}</td><td>${d.state||''}</td><td>${d.url?`<a href="${d.url}" target="_blank" rel="noopener" style="color:var(--teal-d)">open</a>`:'—'}</td></tr>`;
+    const docRow=d=>`<tr style="font-size:.75rem"><td style="padding:.2rem 0">${d.name||'document'}</td><td style="text-align:center">${d.verifiedAt?'<span style="color:var(--ok)">✓ '+d.verifiedAt+'</span>':'<span style="color:var(--warn)">not verified</span>'}</td><td style="color:var(--muted)">${d.verifiedBy||'—'}</td><td>${d.status||'—'}</td><td>${d.state||''}</td><td>${d.providerId&&d.docId?`<a href="/api/document-url?org=${ORG}&providerId=${encodeURIComponent(d.providerId)}&docId=${encodeURIComponent(d.docId)}" target="_blank" rel="noopener" style="color:var(--teal-d)">open</a>`:'—'}</td></tr>`;
     const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const du=e.docsUsed||[];const exp=n>1||du.length>0;
       const head=`<tr style="border-bottom:1px solid var(--line)">
       <td style="padding:.45rem 6px .45rem 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}${e.element}${n?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
@@ -500,7 +504,9 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
     const docs=(r.supportingDocs||[]).map(d=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.3rem 0">${_mdot(d.status)} ${d.name}</td><td style="text-align:center">${d.inPacket?'✓':'—'}</td><td style="text-align:center">${d.inBackend?'✓':'—'}</td><td style="font-size:.78rem;color:${d.status==='review'?'var(--err)':'var(--muted)'}">${d.note}</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted);font-size:.82rem;padding:.3rem 0">no reconcilable documents found</td></tr>';
     const col=r.isReview?'var(--err)':'var(--ok)';
     box.innerHTML=`<div class="card p-4" style="margin-bottom:10px">
-      <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:0 0 2px">Element verification matrix</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 2px">
+        <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">Element verification matrix</span>
+        <button class="btn btn-ghost" style="padding:.25rem .6rem;font-size:.74rem" onclick="exportMatrix('${npi}')">${ic('download',12)} Export to sheet</button></div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.7rem;text-transform:uppercase"><th style="text-align:left">Element</th><th>Required?</th><th>In CAQH?</th><th>Verified?</th><th>Source?</th><th>Value?</th><th>Docs?</th><th>Dates?</th><th>Active?</th><th style="text-align:left">Findings</th></tr>${mrx}</table>
       <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 2px">Element level — Platform vs Supporting docs vs CAQH</div>
       <table style="width:100%;border-collapse:collapse;font-size:.85rem"><tr style="color:var(--muted);font-size:.72rem;text-transform:uppercase;text-align:left"><th>Element</th><th>Platform</th><th>Supporting docs</th><th>CAQH app</th></tr>${three}</table>
@@ -578,6 +584,17 @@ function exportSummaryCsv(){if(!LAST)return;const by={};(LAST.flags||[]).forEach
       fl.length,errs.length,cc('critical'),cc('high'),cc('medium'),fl.filter(f=>f.severity==='warning').length,fl.filter(f=>f.severity==='info').length,
       top?top.message:'',s.workflowId,_plink(s.workflowId)];});
   _dlCsv(head,rows,`credcheck_summary_${(LAST.client||'audit').replace(/\W+/g,'_')}_${_today()}.csv`);}
+// Detailed per-provider matrix export (opens directly in Google Sheets / Excel)
+function exportMatrix(npi){const r=CAQHCACHE[npi];if(!r||!r.matrix){alert('Open the Verification matrix first.');return;}
+  const yn=v=>v===true?'Yes':v===false?'No':'n/a';
+  const head=['Element','Required?','In CAQH?','Verified?','Source match?','Value match?','Documents?','Dates?','Active?','Findings','Documents reviewed (Platform)'];
+  const rows=r.matrix.map(e=>[e.element,e.required?'Yes':'No',yn(e.attested),
+    e.expectedButMissing?'MISSING':yn(e.verified),yn(e.sourceOk),yn(e.valueOk),
+    e.docRequired?(e.docPresent?'Present':'Missing'):(e.docPresent===null?'n/a':(e.docPresent?'Present':'-')),
+    yn(e.datesOk),e.activeOk===true?'Active':e.activeOk===false?'Expired':'n/a',
+    (e.findings||[]).map(f=>'- '+f).join(' \n'),
+    (e.docsUsed||[]).map(d=>`${d.name} (verified ${d.verifiedAt||'-'} by ${d.verifiedBy||'-'}, ${d.status||'-'})`).join(' \n')]);
+  _dlCsv(head,rows,`credcheck_matrix_${(r.provider||npi).replace(/\W+/g,'_')}_${_today()}.csv`);}
 function exportHistory(){window.open('/api/history.csv?org='+ORG,'_blank');}
 
 async function loadDash(){$('dashBody').innerHTML='<div style="color:var(--muted)"><span class="spin"></span> Loading history…</div>';
