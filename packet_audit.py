@@ -28,6 +28,14 @@ def norm_amount(s):
     digits = re.sub(r"[^0-9]", "", str(s or ""))
     return int(digits) if digits else None
 
+def _pow10_ratio(a, b):
+    """True if a and b differ by an exact x10 / x100 / x1000 factor — the signature of an AI
+    digit-misread of a coverage figure (e.g. 1,000,000 read as 10,000,000), not a real difference."""
+    if not a or not b or a == b:
+        return False
+    hi, lo = max(a, b), min(a, b)
+    return hi % lo == 0 and (hi // lo) in (10, 100, 1000)
+
 def norm_date(s):
     """Parse many shapes ('2027-04-05 00:00:00+00:00', '04/05/2027', ...) to YYYY-MM-DD."""
     if not s:
@@ -172,11 +180,14 @@ def check_malpractice(record, packet):
         b_exp, p_exp = norm_date(bm.get("expiration_date")), norm_date(pm.get("expiration_date"))
         if b_exp and p_exp and b_exp != p_exp:
             diffs.append(f"expiration platform={b_exp} packet={p_exp}")
+        # Coverage amounts: flag a real mismatch either way, but ignore an exact x10/x100 ratio,
+        # which is almost always an AI digit-misread of "$1,000,000"-style figures (e.g. 1,000,000
+        # read as 10,000,000), not a genuine coverage difference.
         b_occ, p_occ = norm_amount(bm.get("occurrence_coverage_amount")), norm_amount(pm.get("occurrence_amount"))
-        if b_occ and p_occ and b_occ != p_occ:
+        if b_occ and p_occ and b_occ != p_occ and not _pow10_ratio(b_occ, p_occ):
             diffs.append(f"per-occurrence platform={b_occ} packet={p_occ}")
         b_agg, p_agg = norm_amount(bm.get("aggregate_coverage_amount")), norm_amount(pm.get("aggregate_amount"))
-        if b_agg and p_agg and b_agg != p_agg:
+        if b_agg and p_agg and b_agg != p_agg and not _pow10_ratio(b_agg, p_agg):
             diffs.append(f"aggregate platform={b_agg} packet={p_agg}")
         if diffs:
             flags.append(_flag(

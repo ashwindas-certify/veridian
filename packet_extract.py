@@ -28,6 +28,9 @@ Notes:
   report is issued to, exactly as printed on that document (so a mismatch vs the applicant can be caught).
 - malpractice.insured_name is the NAMED INSURED on the certificate of insurance / COI (the person or
   the group/entity the policy covers), exactly as printed.
+- malpractice occurrence_amount / aggregate_amount: read the coverage limits EXACTLY as printed,
+  digit for digit (e.g. "$1,000,000" is 1000000, NOT 10000000). Do not add or drop zeros; typical
+  limits are 1,000,000 / 3,000,000. Return digits only.
 - npdb.report_count is the number of NPDB reports/disclosures on the report (0 if the report is clear).
 - documents_present: enumerate EVERY distinct supporting document actually INCLUDED in this packet.
   Use the PDF's BOOKMARKS / outline (the table-of-contents entries usually name each document) AND
