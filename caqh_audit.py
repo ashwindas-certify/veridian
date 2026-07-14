@@ -637,16 +637,18 @@ def compare_caqh_elements(master, full, packet=None):
     doc_rows = []
     for label, _ in _DOC_CATS:
         inP, inB = label in packet_cats, label in bq_cats
+        # present in EITHER source = we have the document -> fine. (A required document that is
+        # genuinely absent is caught per-element by the matrix's Documents? check.)
         if inP and inB:
             status, note = "ok", "present in packet and recorded in Platform"
         elif inP and not inB:
-            status, note = "review", "in the packet but not recorded in Platform"
+            status, note = "ok", "present in the packet"
         elif inB and not inP:
-            status, note = "review", "recorded in Platform but not found in the packet"
+            status, note = "ok", "recorded in Platform"
         else:
             continue  # neither source references this doc type — nothing to reconcile
         doc_rows.append({"name": label, "inPacket": inP, "inBackend": inB,
-                         "present": inP, "status": status, "note": note})
+                         "present": True, "status": status, "note": note})
     return element_rows, doc_rows
 
 

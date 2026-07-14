@@ -869,13 +869,24 @@ def caqh_insight(org: str, npi: str):
         conclusion = "REVIEW — " + "; ".join(bits)
     else:
         conclusion = "PASS — CAQH elements reconcile with platform data and supporting docs are present."
+    # overall quality score/signal from the element matrix
+    applicable = [e for e in matrix if e.get("status") != "na"]
+    mx_err = [e for e in matrix if e.get("status") == "error"]
+    mx_rev = [e for e in matrix if e.get("status") == "review"]
+    passed = [e for e in applicable if e.get("status") == "ok"]
+    quality_pct = round(100 * len(passed) / len(applicable)) if applicable else 100
+    quality_signal = "red" if mx_err else ("amber" if mx_rev else "green")
+    quality = {"pct": quality_pct, "signal": quality_signal,
+               "passed": len(passed), "applicable": len(applicable),
+               "errors": len(mx_err), "reviews": len(mx_rev),
+               "label": ("NEEDS ATTENTION" if mx_err else "REVIEW" if mx_rev else "QUALITY PASSED")}
     return {"ok": True, "provider": f'{w["first"]} {w["last"]}', "npi": npi,
             "workHistory": caqh.get("work_history", []), "gapsDisclosed": caqh.get("gaps_disclosed", []),
             "disclosureAnswers": caqh.get("disclosure_answers", []),
             "backendWorkHistory": (m.get("workHistory") if m else []),
             "demographics": demoRows, "elements": elementRows, "threeWay": threeWay,
-            "matrix": matrix, "supportingDocs": docRows, "missingDocs": missingDocs, "flags": flags,
-            "conclusion": conclusion, "isReview": isReview}
+            "matrix": matrix, "quality": quality, "supportingDocs": docRows, "missingDocs": missingDocs,
+            "flags": flags, "conclusion": conclusion, "isReview": isReview}
 
 @app.post("/api/audit")
 def run_audit(a: AuditReq):

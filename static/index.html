@@ -110,7 +110,8 @@
       <button class="btn btn-ghost" onclick="runSelected('education')" title="Education &amp; Training only — one targeted read per file, much faster">Run E&amp;T only</button>
       <button class="btn btn-ghost" onclick="runFiltered()">Run all filtered</button>
       <span id="expBtn" style="display:none;gap:6px;align-items:center">
-        <button class="btn btn-ghost" onclick="exportAuditCsv()" title="One row per finding — full detail"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Findings CSV</button>
+        <select id="expSev" title="Filter findings by type" style="font-size:.78rem"><option value="">All types</option><option value="error">Errors only</option><option value="warning">Warnings only</option><option value="info">Info only</option></select>
+        <button class="btn btn-ghost" onclick="exportAuditCsv($('expSev').value)" title="One row per finding — full detail"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Findings CSV</button>
         <button class="btn btn-ghost" onclick="exportSummaryCsv()" title="One row per provider — counts &amp; top issue">Summary CSV</button></span>
     </div>
     <div id="loading" class="card p-4 mb-3 hidden">
@@ -483,7 +484,7 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
       <td style="text-align:center">${itcell(it.valueOk)}</td>
       <td style="text-align:center">${itcell(it.datesOk)}</td></tr>`;
     const docRow=d=>`<tr style="font-size:.75rem"><td style="padding:.2rem 0">${d.name||'document'}</td><td style="text-align:center">${d.verifiedAt?'<span style="color:var(--ok)">✓ '+d.verifiedAt+'</span>':'<span style="color:var(--warn)">not verified</span>'}</td><td style="color:var(--muted)">${d.verifiedBy||'—'}</td><td>${d.status||'—'}</td><td>${d.state||''}</td><td>${d.providerId&&d.docId?`<a href="/api/document-url?org=${ORG}&providerId=${encodeURIComponent(d.providerId)}&docId=${encodeURIComponent(d.docId)}" target="_blank" rel="noopener" style="color:var(--teal-d)">open</a>`:'—'}</td></tr>`;
-    const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const du=e.docsUsed||[];const exp=n>1||du.length>0;
+    const mrx=(r.matrix||[]).map((e,i)=>{const its=e.items||[];const n=its.length;const du=e.docsUsed||[];const exp=n>0||du.length>0;
       const head=`<tr style="border-bottom:1px solid var(--line)">
       <td style="padding:.45rem 6px .45rem 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${exp?`<span style="cursor:pointer;color:var(--muted)" onclick="var x=document.getElementById('mi${i}');x.style.display=x.style.display==='none'?'':'none'">▸</span> `:''}${e.element}${n?` <span style="color:var(--muted);font-size:.72rem">(${n})</span>`:''}</td>
       <td style="vertical-align:top;padding-top:.45rem;text-align:center" title="${e.requiredWhy}">${e.required?'<span style="color:var(--ink)">Yes</span>':'<span style="color:var(--muted)">No</span>'}</td>
@@ -503,7 +504,13 @@ async function matrixTab(npi){const box=$('matrixBox');if(box.dataset.loaded)ret
     const three=(r.threeWay||[]).map(e=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.4rem 6px 0 0;vertical-align:top;white-space:nowrap">${_mdot(e.status)} ${e.element}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.platform,e.platformCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.docs,e.docCount)}</td><td style="vertical-align:top;padding-top:.4rem">${cell(e.caqh,e.caqhCount)}</td></tr>`).join('');
     const docs=(r.supportingDocs||[]).map(d=>`<tr style="border-bottom:1px solid var(--line)"><td style="padding:.3rem 0">${_mdot(d.status)} ${d.name}</td><td style="text-align:center">${d.inPacket?'✓':'—'}</td><td style="text-align:center">${d.inBackend?'✓':'—'}</td><td style="font-size:.78rem;color:${d.status==='review'?'var(--err)':'var(--muted)'}">${d.note}</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted);font-size:.82rem;padding:.3rem 0">no reconcilable documents found</td></tr>';
     const col=r.isReview?'var(--err)':'var(--ok)';
+    const q=r.quality||{};const qcol=q.signal==='green'?'var(--ok)':q.signal==='amber'?'var(--warn)':'var(--err)';
+    const qbanner=q.pct!=null?`<div style="display:flex;align-items:center;gap:12px;background:${qcol}14;border:1px solid ${qcol}55;border-radius:12px;padding:12px 16px;margin-bottom:12px">
+      <div style="width:52px;height:52px;border-radius:50%;background:${qcol};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1rem;flex:0 0 auto">${q.pct}%</div>
+      <div><div style="font-weight:700;color:${qcol};font-size:1rem">${q.label||''}</div>
+        <div style="font-size:.82rem;color:var(--muted)">${q.passed}/${q.applicable} elements passed${q.errors?` · <span style="color:var(--err)">${q.errors} error</span>`:''}${q.reviews?` · <span style="color:var(--warn)">${q.reviews} review</span>`:''}</div></div></div>`:'';
     box.innerHTML=`<div class="card p-4" style="margin-bottom:10px">
+      ${qbanner}
       <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 2px">
         <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">Element verification matrix</span>
         <button class="btn btn-ghost" style="padding:.25rem .6rem;font-size:.74rem" onclick="exportMatrix('${npi}')">${ic('download',12)} Export to sheet</button></div>
@@ -564,15 +571,17 @@ function _dlCsv(head,rows,name){
   a.download=name;a.click();}
 function _today(){return new Date().toISOString().slice(0,10);}
 function _plink(wid){return `https://ng.certifyos.com/credentialing/${wid}?organizationId=${ORG}`;}
-// Detailed export: one row per finding
-function exportAuditCsv(){if(!LAST)return;const sm={};LAST.summary.forEach(s=>sm[s.workflowId]=s);
+// Detailed export: one row per finding (optional severity filter: 'error'|'warning'|'info')
+function exportAuditCsv(sev){if(!LAST)return;const sm={};LAST.summary.forEach(s=>sm[s.workflowId]=s);
   const head=['Run date','Client','Provider','NPI','Provider type','States','Analyst','Provider status',
     'Severity','Criticality','Category','Element','Element state','Finding','Guideline','Confidence','Source','Workflow ID','Platform link'];
   const rank={error:0,warning:1,info:2},crank={critical:0,high:1,medium:2};
-  const flags=[...(LAST.flags||[])].sort((a,b)=>(rank[a.severity]-rank[b.severity])||((crank[a.criticality]??3)-(crank[b.criticality]??3)));
+  let flags=[...(LAST.flags||[])];
+  if(sev)flags=flags.filter(f=>f.severity===sev);
+  flags.sort((a,b)=>(rank[a.severity]-rank[b.severity])||((crank[a.criticality]??3)-(crank[b.criticality]??3)));
   const rows=flags.map(f=>{const s=sm[f.workflowId]||{};return [_today(),LAST.client||'',s.provider,s.npi,s.type,s.states,s.responsible,s.status,
     f.severity,f.criticality||'',f.category||f.flagClass,f.element,f.state,f.message,f.expected||'',f.confidence,f.flagClass,f.workflowId,_plink(f.workflowId)];});
-  _dlCsv(head,rows,`credcheck_findings_${(LAST.client||'audit').replace(/\W+/g,'_')}_${_today()}.csv`);}
+  _dlCsv(head,rows,`credcheck_findings_${sev?sev+'_':''}${(LAST.client||'audit').replace(/\W+/g,'_')}_${_today()}.csv`);}
 // Summary export: one row per provider
 function exportSummaryCsv(){if(!LAST)return;const by={};(LAST.flags||[]).forEach(f=>(by[f.workflowId]=by[f.workflowId]||[]).push(f));
   const head=['Run date','Client','Provider','NPI','Provider type','States','Analyst','Status','Audit confidence',
