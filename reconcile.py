@@ -93,13 +93,31 @@ def name_matches(row, r, c):
 def value_in_ok(row, r, c):
     """Pass (no flag) if field value is one of the 'clean' outcomes; flag = a real hit."""
     return (row.get(r["field"]) or "").strip() in r["ok_values"]
+def _npdb_nonboard(row):
+    """A licensure-action row sourced from NPDB that is NOT a board action. NPDB reports
+    (e.g. malpractice payments) surface here as 'Action Found' but are handled by the NPDB
+    element, so they must not be flagged as a licensure board action."""
+    src = str(row.get("source") or "").lower()
+    is_npdb = "national practitioner data bank" in src or "npdb" in src
+    board = str(row.get("board_action_flag") or "").strip().lower() == "true"
+    return is_npdb and not board
+def licensure_adverse(row, r, c):
+    """Flag a real licensure board action; pass clean outcomes AND NPDB-sourced non-board reports."""
+    if (row.get(r["field"]) or "").strip() in r["ok_values"]:
+        return True
+    return _npdb_nonboard(row)
 def value_not_in(row, r, c):
     """Flag if the field's value IS one of bad_values (e.g. status is 'Cancelled')."""
     return (row.get(r["field"]) or "").strip() not in r.get("bad_values", [])
 def adverse_requires_doc(row, r, c):
-    """If a finding is adverse (value NOT in the clean set), a supporting document must be
-    attached to the record (document_id/file_type/document_name). Clean findings need none."""
+    """If a finding is adverse (value NOT in the clean set), it must be SUPPORTED. Support =
+    a recorded primary source (the verification source itself) OR an attached document. Clean
+    findings need nothing; an NPDB-sourced non-board licensure report is not treated as adverse."""
     if (row.get(r["field"]) or "").strip() in r["ok_values"]:
+        return True
+    if r.get("element") == "licensureActions" and _npdb_nonboard(row):
+        return True
+    if str(row.get("source") or "").strip():          # verified from a primary source -> supported
         return True
     return bool(str(row.get("document_id") or "").strip() or str(row.get("file_type") or "").strip()
                 or str(row.get("document_name") or "").strip())
@@ -145,6 +163,7 @@ PRIMS = {"status_in": status_in, "not_expired": not_expired, "coverage_min": cov
     "active_but_expired": active_but_expired, "field_present": field_present, "date_order": date_order,
     "date_not_future": date_not_future, "verified": verified, "name_matches": name_matches,
     "value_in_ok": value_in_ok, "value_not_in": value_not_in, "gap_explained": gap_explained,
+    "licensure_adverse": licensure_adverse,
     "adverse_requires_doc": adverse_requires_doc, "verified_within": verified_within,
     "expiring_soon": expiring_soon, "coverage_min_matrix": coverage_min_matrix}
 
@@ -319,9 +338,16 @@ def evaluate(master):
         # ---- completeness: missing required DATA (element has 0 rows) ----
         req = required_for(dem["providerType"], dem.get("credentialingCycle"),
                            parse_states(dem.get("assignedStates") or dem.get("states")))
+        # work history is often verified via an application_verifications "Work History" row rather
+        # than the workHistory element table — treat either as present.
+        appvers = m.get("appVerifications") or []
+        wh_verified = any("work" in str(v.get("verification_type") or "").lower() for v in appvers)
         evaluable = 0
         for el in req:
-            if deduped.get(el, m.get(el, [])):
+            present = bool(deduped.get(el, m.get(el, [])))
+            if el == "workHistory" and not present and wh_verified:
+                present = True
+            if present:
                 evaluable += 1
             else:
                 add(el, "MISSING_" + el.upper(), "error",

@@ -110,7 +110,7 @@
      "field": "type_of_action", "ok_values": ["No Match Found", "No Record Found", "Clear", ""],
      "severity": "error", "message": "SANCTION: {sanction_type} returned '{value}'",
      "expected": "a sanction 'Match Found' flags the file Non-Clean; confirm on the sanction website and, if it doesn't match the CertifyOS artifact, upload a screenshot and remove the artifact"},
-    {"id": "LICENSURE_ADVERSE_ACTION", "element": "licensureActions", "check": "value_in_ok",
+    {"id": "LICENSURE_ADVERSE_ACTION", "element": "licensureActions", "check": "licensure_adverse",
      "field": "action_type", "ok_values": ["No Action", "None", ""],
      "severity": "error", "message": "LICENSURE ACTION ({state}): '{value}'",
      "expected": "any licensure board action must be listed on the platform and the file flagged Non-Clean; obtain the board's disciplinary-action document from the State Board and upload it"},

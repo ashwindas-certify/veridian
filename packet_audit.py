@@ -221,32 +221,34 @@ def check_board_certs(record, packet):
     return flags
 
 def check_documents(record, packet):
+    """Missing-document checks. A document counts as present via ANY signal — the documents_present
+    list, the element block actually read from the packet, OR the platform element having rows —
+    so we don't false-flag a document the AI read but labelled differently."""
     flags = []
     def _doc_text(d):
         return f"{d.get('label', '')} {d.get('category', '')}" if isinstance(d, dict) else str(d)
     docs = " | ".join(_doc_text(d).lower() for d in (packet.get("documents_present") or []))
-
     def present(*needles):
         return any(n in docs for n in needles)
+    npdb = packet.get("npdb") or {}
 
-    if not present("state license", "license report", "license verification", "licensure"):
-        flags.append(_flag(
-            record, packet, "document", None,
-            "PACKET_DOC_MISSING", "high", 0.85,
-            "Packet is missing a state license report/verification document.",
-        ))
-    if not packet.get("npdb_report_present"):
-        flags.append(_flag(
-            record, packet, "document", None,
-            "PACKET_DOC_MISSING", "high", 0.85,
-            "Packet is missing the NPDB report (npdb_report_present is not true).",
-        ))
-    if not present("certificate of insurance", "coi", "insurance", "malpractice"):
-        flags.append(_flag(
-            record, packet, "document", None,
-            "PACKET_DOC_MISSING", "high", 0.85,
-            "Packet is missing a certificate of insurance (COI).",
-        ))
+    license_ok = present("state license", "license report", "license verification", "licensure") \
+        or bool(packet.get("state_licenses")) or bool(record.get("stateLicenses"))
+    npdb_ok = bool(packet.get("npdb_report_present")) or bool(npdb.get("present")) \
+        or present("npdb", "national practitioner", "data bank") \
+        or bool(npdb.get("report_count")) or bool(record.get("npdb"))
+    coi_ok = present("certificate of insurance", "coi", "insurance", "malpractice", "liability") \
+        or bool(packet.get("malpractice")) or bool(record.get("malpractice"))
+
+    if not license_ok:
+        flags.append(_flag(record, packet, "document", None, "PACKET_DOC_MISSING", "high", 0.8,
+            "Packet is missing a state license report/verification document."))
+    if not npdb_ok:
+        flags.append(_flag(record, packet, "document", None, "PACKET_DOC_MISSING", "high", 0.8,
+            "Packet is missing the NPDB report."))
+    if not coi_ok:
+        flags.append(_flag(record, packet, "document", None, "PACKET_DOC_MISSING", "high", 0.8,
+            "Packet is missing a certificate of insurance (COI)."))
     return flags
 
 def _backend_name(record):

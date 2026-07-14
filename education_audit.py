@@ -105,14 +105,15 @@ def _describe(e):
     return " ".join(parts)
 
 
-# Which primary source the E&T verification cites. NCQA hierarchy (per client guidelines):
-#   board certified   -> verify E&T THROUGH the board certification (highest source)
-#   not board certified -> verify E&T through the state LICENSING agency (fallback source)
-# NOTE: keep board tokens SPECIFIC — a bare "board" would also match "State Medical Board"
-# (a licensing agency), collapsing the hierarchy. Licensing tokens are checked first.
-_BOARD_SRC = ("abms", "american board", "certifying board", "board cert", "board-cert", "certif", "abpn")
-_LICENSE_SRC = ("licens", "state board", "state medical", "medical board", "osteopathic board",
-                "ama", "physician profile", "ecfmg", "fsmb", "school", "university")
+# Acceptable E&T verification sources / proxies (NCQA): board certification, state licensing
+# board/agency, the educational institution (primary), AMA/AOA physician profile, ECFMG, FSMB,
+# and the National Student Clearinghouse. "Provider Application" alone (self-report) is NOT an
+# acceptable primary source for education & training.
+_ACCEPTABLE_ET_SRC = ("board cert", "board-cert", "certification", "abms", "abpn", "aoa",
+                      "licensing board", "licensing agency", "state board", "medical board",
+                      "educational institution", "institution", "medical school", "school", "university",
+                      "ama", "american medical", "ecfmg", "fsmb", "student clearinghouse", "clearinghouse")
+_SELF_REPORT_SRC = ("provider application", "application", "self")
 
 
 def _et_sources(master_record):
@@ -134,33 +135,25 @@ def _matches(text, needles):
 
 
 def check_source_hierarchy(master_record, packet, has_board_cert):
-    """Read the E&T verification source and confirm it followed the board-cert-vs-licensing
-    hierarchy. Flags when the wrong tier was used (e.g. board certified but verified through the
-    licensing agency, or not board certified but no acceptable licensing-agency source cited)."""
+    """E&T must be verified from an acceptable primary source or proxy (board certification,
+    licensing board/agency, educational institution, AMA/AOA, ECFMG, clearinghouse). A licensing
+    board/agency is a valid proxy. Flag ONLY when the source is self-report (provider application)
+    only, or no acceptable source is cited."""
     srcs = _et_sources(master_record)
     if not srcs:
         return []  # no source recorded -> presence handled by EDU_NOT_VERIFIED_IN_BACKEND
     src_text = " | ".join(srcs).lower()
-    used_board = _matches(src_text, _BOARD_SRC)
-    used_license = _matches(src_text, _LICENSE_SRC)
-    flags = []
-    if has_board_cert:
-        expected = "board-certified provider: verify E&T THROUGH the board certification"
-        if not used_board and used_license:
-            flags.append(_flag(
-                master_record, packet, "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED", "warning", 0.7,
-                "Provider is board certified, so E&T should be verified through the board "
-                f"certification, but the recorded source is the licensing agency: [{', '.join(srcs)}].",
-                expected))
-    else:
-        expected = "non-board-certified provider: verify E&T through the licensing agency"
-        if not used_license:
-            flags.append(_flag(
-                master_record, packet, "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED", "warning", 0.68,
-                "Provider is not board certified, so E&T should be verified through the licensing "
-                f"agency, but the recorded source does not indicate one: [{', '.join(srcs)}].",
-                expected))
-    return flags
+    if _matches(src_text, _ACCEPTABLE_ET_SRC):
+        return []  # verified via an acceptable primary source / proxy -> OK
+    # only self-report / unrecognized sources present
+    if _matches(src_text, _SELF_REPORT_SRC):
+        return [_flag(
+            master_record, packet, "EDU_SOURCE_SELF_REPORTED", "warning", 0.7,
+            "Education & training appears verified only via the provider application (self-report): "
+            f"[{', '.join(srcs)}] — NCQA requires an acceptable primary source or proxy (licensing "
+            "board/agency, board certification, educational institution, AMA/AOA, ECFMG, clearinghouse).",
+            "E&T must be verified from an acceptable primary source or proxy, not self-report")]
+    return []  # unrecognized but not clearly self-report -> don't false-flag
 
 
 # ---------------------------------------------------------------- entry point

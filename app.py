@@ -800,7 +800,7 @@ def education_insight(org: str, npi: str):
         return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
     record_extraction(org, org, wid, npi, "education", edu)  # persist what AI read from the app
     errs = [f for f in flags if f.get("severity") == "error"]
-    hierarchy = [f for f in flags if f.get("rule") == "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED"]
+    hierarchy = [f for f in flags if f.get("rule") in ("EDU_SOURCE_SELF_REPORTED", "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED")]
     has_board = bool((m or {}).get("boardCertifications"))
     sources = education_audit._et_sources(m) if m else []
     if errs:

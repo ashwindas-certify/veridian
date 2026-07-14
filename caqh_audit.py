@@ -169,6 +169,17 @@ def _disclosed_covers(gap_start, gap_end, gaps_disclosed):
     return False
 
 
+def _element_verified(master_record, keyword):
+    """True if the platform has an application-verification row for this element (verification_type
+    contains keyword) that was actually verified (a source/method is recorded). This is the
+    authoritative signal that an analyst verified the element via the Provider Application etc."""
+    for row in master_record.get("appVerifications") or []:
+        vtype = (row.get("verification_type") or "").lower()
+        if keyword in vtype and str(row.get("source") or "").strip():
+            return True
+    return False
+
+
 def _backend_verdict(master_record, keyword):
     """Return the explanation of the first appVerifications row whose
     verification_type contains ``keyword`` (case-insensitive), or None."""
@@ -183,6 +194,14 @@ def _says_no_gap(explanation):
     """Platform work-history verdict asserts there is NO employment gap."""
     e = (explanation or "").lower()
     return "no" in e and "gap" in e
+
+def _wh_verdict_explains(explanation):
+    """Platform work-history verdict indicates the work history is verified / any gap explained
+    (e.g. 'Employment gap found with explanation', 'Verified through Provider Application',
+    'No employment gap found'). We defer to this analyst verdict and don't re-flag the gap."""
+    e = (explanation or "").lower()
+    return ("with explanation" in e or "verified through" in e or "no employment gap" in e
+            or ("no" in e and "gap" in e))
 
 
 _DISCLOSURE_MAP = [
@@ -280,6 +299,8 @@ def caqh_audit(master_record, pdf_path, packet=None, gap_days_by_state=None):
         else:
             window_start, basis = (earliest_emp or window_5y), "last 5 years"
 
+    # Defer to the platform's work-history verification (analyst-verified via app_verifications).
+    wh_platform_ok = _element_verified(master_record, "work")
     # Walk the timeline; measure each uncovered stretch inside the window in whole months.
     unexplained_gaps = []  # (gap_days, gap_start, gap_end, prev_employer, cur_employer)
     def _consider_gap(prev_end, next_start, prev_emp, next_emp):
@@ -289,14 +310,15 @@ def caqh_audit(master_record, pdf_path, packet=None, gap_days_by_state=None):
         gap_months = _gap_months(gs, next_start)
         if gap_months < threshold_months:
             return                                # below threshold -> No Employment Gap Found
-        explained = _disclosed_covers(gs, next_start, gaps_disclosed)
+        explained = _disclosed_covers(gs, next_start, gaps_disclosed) or wh_platform_ok
         span = f"{fmt(gs)} to {fmt(next_start)} (~{gap_months} mo)"
         between = f" between '{prev_emp}' and '{next_emp}'" if (prev_emp or next_emp) else ""
         if explained:
+            why = ("the provider disclosed an explanation on the application" if not wh_platform_ok
+                   else "platform verified the work history (Provider Application)")
             flags.append(_flag(
                 master_record, packet, "CAQH_WORKHISTORY_GAP_EXPLAINED", "info", 0.8,
-                f"Employment Gap Found WITH Explanation — {span}{between}, within the {basis}; "
-                f"the provider disclosed an explanation on the application."))
+                f"Employment Gap Found WITH Explanation — {span}{between}, within the {basis}; {why}."))
         else:
             unexplained_gaps.append(((next_start - gs).days, gs, next_start, prev_emp, next_emp))
             flags.append(_flag(
@@ -314,9 +336,12 @@ def caqh_audit(master_record, pdf_path, packet=None, gap_days_by_state=None):
     if cursor < ASOF:                              # trailing gap up to today (not currently employed)
         _consider_gap(cursor, ASOF, prev_emp, "present")
 
-    # 2) Packet shows work history but platform verified work history is empty.
+    # 2) Packet shows work history but platform has NO verified work history (element table OR an
+    #    application_verifications "Work History" row).
     backend_wh = master_record.get("workHistory") or []
-    if work_history and not backend_wh:
+    wh_verified = any("work" in str(v.get("verification_type") or "").lower()
+                      for v in (master_record.get("appVerifications") or []))
+    if work_history and not backend_wh and not wh_verified:
         flags.append(_flag(
             master_record, packet,
             "CAQH_NOT_VERIFIED_IN_BACKEND", "warning", 0.75,
@@ -338,36 +363,31 @@ def caqh_audit(master_record, pdf_path, packet=None, gap_days_by_state=None):
             f"between '{prev_emp}' and '{cur_emp}'.",
         ))
 
-    # 4) Platform "Disclosure" verdict says answered favourably, but the AI found
-    #    at least one unfavorable disclosure answer -> contradiction.
-    disclosure_mismatch = bool(unfavorable) and disc_verdict is not None and _says_favourable(disc_verdict)
-    if disclosure_mismatch:
-        qs = "; ".join(str(d.get("question")) for d in unfavorable)
-        flags.append(_flag(
-            master_record, packet,
-            "DISCLOSURE_VERDICT_MISMATCH", "error", 0.7,
-            f"Platform disclosure verdict says answered favourably "
-            f"(explanation: {disc_verdict!r}), but the CAQH application has "
-            f"{len(unfavorable)} unfavorable disclosure answer(s): {qs}.",
-        ))
-
-    # 5) Per unfavorable disclosure: flag ONLY when (A) there is no explanation AND no supporting
-    #    platform record, or (B) it contradicts platform data. A disclosure that is explained OR
-    #    backed by a matching platform record is OK (info), not a flag.
-    for d in unfavorable:
-        if disclosure_mismatch:
-            break  # already flagged as a verdict contradiction above
-        ok, note = _disclosure_supported(d, master_record)
-        q = str(d.get("question") or "disclosure")
-        if ok:
+    # 4/5) Disclosures. If the platform's Disclosure Questions verification is positive (answered
+    #      favourably / verified through the application), we DEFER to that analyst verdict and do
+    #      not re-flag from the AI reading. Only when the platform verdict is absent/negative do we
+    #      run the per-disclosure support check: flag a "yes" ONLY when it has no explanation AND no
+    #      matching platform record.
+    disc_platform_ok = _element_verified(master_record, "disclosure")
+    if disc_platform_ok:
+        if unfavorable:
             flags.append(_flag(
-                master_record, packet, "DISCLOSURE_SUPPORTED", "info", 0.75,
-                f"Disclosure '{q}' answered yes — supported ({note})."))
-        else:
-            flags.append(_flag(
-                master_record, packet, "DISCLOSURE_UNSUPPORTED", "error", 0.7,
-                f"Disclosure '{q}' answered yes but {note} — a supporting explanation or matching "
-                f"platform record is required."))
+                master_record, packet, "DISCLOSURE_PLATFORM_VERIFIED", "info", 0.8,
+                f"Platform verified disclosure questions (via Provider Application); "
+                f"{len(unfavorable)} AI-noted answer(s) not treated as findings."))
+    else:
+        for d in unfavorable:
+            ok, note = _disclosure_supported(d, master_record)
+            q = str(d.get("question") or "disclosure")
+            if ok:
+                flags.append(_flag(
+                    master_record, packet, "DISCLOSURE_SUPPORTED", "info", 0.75,
+                    f"Disclosure '{q}' answered yes — supported ({note})."))
+            else:
+                flags.append(_flag(
+                    master_record, packet, "DISCLOSURE_UNSUPPORTED", "error", 0.7,
+                    f"Disclosure '{q}' answered yes but {note} — a supporting explanation or matching "
+                    f"platform record is required."))
 
     # 6) Info summary so reviewers can see the check ran.
     flags.append(_flag(
