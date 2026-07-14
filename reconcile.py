@@ -57,6 +57,22 @@ def active_but_expired(row, r, c):
     active = (row.get(r["status_field"]) or "").strip().lower() in {s.lower() for s in D[r["params_ref"]]}
     d = parse_date(row.get(r["field"])); return not (active and d is not None and d < ASOF)
 def field_present(row, r, c): return bool(str(row.get(r["field"]) or "").strip())
+
+def _fn(s): return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+# Internal / optional columns that are noise as "missing field" data-entry flags. Fields whose
+# normalized name starts with "reportdata" (NPDB internals) are also suppressed.
+_NOISE_FIELDS_GLOBAL = {_fn(x) for x in (
+    "file_type", "middle_name", "subSpecialty", "unlimited_coverage", "report_dcn",
+    "recent_change_date", "report_data", "deceased", "totalPaymentForThisPractitioner",
+    "flag_active", "flag_description", "flag_flagType", "state_id_name", "sub_collection_name")}
+_NOISE_FIELDS_BY_EL = {("dea", "licensenumber"), ("npdb", "licensenumber")}
+
+def _is_noise_field(rule):
+    if rule.get("check") != "field_present":
+        return False
+    fn = _fn(rule.get("field"))
+    return (fn in _NOISE_FIELDS_GLOBAL or fn.startswith("reportdata")
+            or (rule.get("element"), fn) in _NOISE_FIELDS_BY_EL)
 def date_order(row, r, c):
     a = parse_date(row.get(r["before_field"])); b = parse_date(row.get(r["field"])); return not (a and b and a > b)
 def date_not_future(row, r, c):
@@ -268,8 +284,12 @@ def evaluate(master):
         deduped = {el: dedup(el, m.get(el, [])) for el in DEDUP_KEYS}
         deduped["demographics"] = [dem]  # single-row element so demographics rules can run
 
+        seen = set()  # collapse identical data-entry flags repeated across rows
         def add(element, rule_id, sev, msg, conf, who="(n/a)", when="", state="", expected=""):
             if rule_id in DISABLED_RULES: return  # per-client toggle
+            key = (element, rule_id, msg)
+            if key in seen: return
+            seen.add(key)
             flags.append({**base, "flagClass": "", "element": element, "state": state or "", "rule": rule_id,
                           "severity": sev, "confidence": conf, "message": msg, "expected": expected,
                           "verified_by": who or "(none)", "verified_at": str(when or "")[:10]})
@@ -277,6 +297,7 @@ def evaluate(master):
         # ---- row-scope rules (validity, data-entry, name) ----
         for rule in CAT["rules"] + CUSTOM_RULES:
             if "id" not in rule: continue
+            if _is_noise_field(rule): continue          # skip internal/optional missing-field noise
             prim = PRIMS.get(rule["check"])
             if not prim: continue
             for row in deduped.get(rule["element"], m.get(rule["element"], [])):

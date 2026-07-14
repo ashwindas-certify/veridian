@@ -5,6 +5,7 @@ Run:  cd ~/Downloads/psv_audit && python -m uvicorn app:app --port 8000
 import os, json, glob, urllib.request, threading, uuid
 from collections import Counter
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 JOBS = {}  # in-memory job queue: jobId -> {type,client,org,status,processed,total,flags,note,startedAt,finishedAt}
 
@@ -30,6 +31,52 @@ def record_history(org, client, summary, flags, run_mode="audit"):
     with open(HISTORY, "a", encoding="utf-8") as fh:
         for r in rows: fh.write(json.dumps(r) + "\n")
     return rows
+
+EXTRACT_TABLE = "certifyos-production-platform.psv_audit.application_extractions"  # AI reads of the packet
+EXTRACT_MIRROR = "application_extractions.jsonl"                                    # local mirror
+_EXTRACT_CACHE = {}  # (workflowId, etype) -> last AI extraction, so insights reuse the audit's read
+
+def _load_extraction_bq(wid, etype):
+    """Most recent stored AI extraction for a workflow, so re-runs skip the Gemini read."""
+    try:
+        job = master_record._client.query(
+            f"SELECT data FROM `{EXTRACT_TABLE}` WHERE workflow_id=@w AND extraction_type=@t "
+            f"ORDER BY run_ts DESC LIMIT 1",
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("w", "STRING", wid),
+                bigquery.ScalarQueryParameter("t", "STRING", etype)]))
+        for r in job.result():
+            return json.loads(r["data"])
+    except Exception as e:
+        print("[warn] extraction load failed:", str(e)[:100])
+    return None
+
+def get_extraction(wid, etype):
+    """In-memory cache -> BQ -> None. Packet PDFs are stable for PSV-complete files, so reusing a
+    prior read is safe and makes re-runs near-instant (backend/BQ data is always re-fetched fresh)."""
+    if (wid, etype) in _EXTRACT_CACHE:
+        return _EXTRACT_CACHE[(wid, etype)]
+    d = _load_extraction_bq(wid, etype)
+    if d is not None:
+        _EXTRACT_CACHE[(wid, etype)] = d
+    return d
+
+def record_extraction(org, client, wid, npi, etype, data):
+    """Persist everything the AI read from the application PDF (CAQH, education, packet) to BQ."""
+    _EXTRACT_CACHE[(wid, etype)] = data  # reuse for on-demand insights (no re-read)
+    ts = datetime.now(timezone.utc).isoformat()
+    row = {"run_ts": ts, "org": org, "client": client, "workflow_id": wid, "npi": npi,
+           "extraction_type": etype, "data": json.dumps(data, default=str)}
+    try:
+        master_record._client.insert_rows_json(EXTRACT_TABLE, [row])  # streaming insert
+    except Exception as e:
+        print("[warn] BQ extraction insert failed:", str(e)[:150])
+    try:
+        with open(EXTRACT_MIRROR, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+    return row
 
 JOB_RESULTS = {}  # jobId -> list of flag rows (for per-request export)
 
@@ -62,8 +109,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
+from google.cloud import bigquery
 
-import reconcile, master_record, audit, packet_audit, caqh_audit, rules_engine_results, education_audit
+import reconcile, master_record, audit, packet_audit, caqh_audit, rules_engine_results, education_audit, packet_extract
 
 app = FastAPI(title="PSV Audit")
 CLIENTS = "clients"
@@ -80,9 +128,53 @@ def client_files():
                     "orgIds": o.get("orgIds", []), "overlay": o})
     return out
 
+CONFIG_TABLE = "certifyos-production-platform.psv_audit.client_config"  # durable client-config snapshots
+_CFG_CACHE = {}  # org -> overlay dict. BQ is the source of truth; this avoids a BQ read per call.
+
+def _bq_load_config(org):
+    """Latest persisted config for this org from BQ (survives restarts / redeploys)."""
+    try:
+        job = master_record._client.query(
+            f"SELECT config FROM `{CONFIG_TABLE}` WHERE org=@o ORDER BY updated_ts DESC LIMIT 1",
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("o", "STRING", org)]))
+        for r in job.result():
+            return json.loads(r["config"])
+    except Exception as e:
+        print("[warn] BQ config load failed:", str(e)[:120])
+    return None
+
+def _persist_overlay(c, org):
+    """Persist a client's overlay to BQ (durable, source of truth) + local JSON mirror + cache."""
+    o = c["overlay"]
+    try:
+        json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)  # local mirror
+    except Exception:
+        pass
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        master_record._client.insert_rows_json(CONFIG_TABLE, [{
+            "updated_ts": ts, "org": org, "client": c.get("name") or o.get("clientName"),
+            "config": json.dumps(o, default=str)}])
+    except Exception as e:
+        print("[warn] BQ config persist failed:", str(e)[:120])
+    for oid in (c.get("orgIds") or [org]):
+        _CFG_CACHE[oid] = o
+    return ts
+
 def find_client(org):
     for c in client_files():
-        if org in c["orgIds"]: return c
+        if org in c["orgIds"]:
+            if org in _CFG_CACHE:
+                c["overlay"] = _CFG_CACHE[org]           # in-process cache
+            else:
+                bqcfg = _bq_load_config(org)             # durable BQ snapshot beats the JSON file
+                if bqcfg:
+                    bqcfg.setdefault("orgIds", c["overlay"].get("orgIds", []))
+                    bqcfg.setdefault("clientName", c["overlay"].get("clientName"))
+                    c["overlay"] = bqcfg
+                _CFG_CACHE[org] = c["overlay"]
+            return c
     return None
 
 # ---------- API ----------
@@ -148,7 +240,7 @@ def refresh_guidelines(rq: GuidelinesReq):
         if gen.get(k) is not None: o[k] = gen[k]
     if gen.get("packetChecks"): o["packetChecks"] = gen["packetChecks"]
     o["guidelinesUrl"] = rq.docUrl
-    json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+    _persist_overlay(c, rq.org)
     try: open(os.path.join(CLIENTS, f"{c['name'].lower()}.guidelines.txt"), "w", encoding="utf-8").write(text)
     except Exception: pass
     return {"ok": True, "overrides": list(o.get("overrides", {}).keys()), "packetChecks": len(o.get("packetChecks", []))}
@@ -162,8 +254,20 @@ def toggle(t: Toggle):
     o = c["overlay"]; dis = set(o.get("disabledRules", []))
     dis.discard(t.ruleId) if t.enabled else dis.add(t.ruleId)
     o["disabledRules"] = sorted(dis)
-    json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+    _persist_overlay(c, t.org)
     return {"ok": True, "disabledRules": o["disabledRules"]}
+
+class SaveConfigReq(BaseModel):
+    org: str
+@app.post("/api/config/save")
+def save_config(rq: SaveConfigReq):
+    """Explicit 'Save changes': persist the client's current rule config to BQ (durable snapshot)."""
+    c = find_client(rq.org)
+    if not c: return {"ok": False, "reason": "This client has no config yet."}
+    o = c["overlay"]
+    ts = _persist_overlay(c, rq.org)
+    return {"ok": True, "savedAt": ts, "disabledRules": len(o.get("disabledRules", [])),
+            "customRules": len(o.get("customRules", []))}
 
 _ENGINE_LOCK = threading.Lock()  # guards the shared rule-engine config during evaluate
 
@@ -196,32 +300,88 @@ def download_packet(wid, org, path):
     with urllib.request.urlopen(signed, timeout=180) as r, open(path, "wb") as f:
         f.write(r.read())
 
-def deep_packet_audit(wfs, master):
-    """Per-workflow DEEP checks: packet-vs-backend + CAQH work-history (both read the PDF via
-    Gemini, downloading it if absent) + surface CertifyOS's own rulesEngineResults (API).
-    Returns (extra_flags, notes) where notes records per-workflow failures."""
+# Ordered verification steps shown as the live progress timeline for each file.
+DEEP_STEPS = ["Packet documents (licenses · DEA · board · malpractice · NPDB)",
+              "CAQH application (all elements · demographics · attestation)",
+              "Education & training",
+              "Client rule engine"]
+
+def _init_steps(jid, who):
+    if jid and jid in JOBS:
+        JOBS[jid]["steps"] = [{"name": n, "status": "pending"} for n in DEEP_STEPS]
+        JOBS[jid]["stepFor"] = who
+
+def _set_step(jid, idx, status):
+    if jid and jid in JOBS and JOBS[jid].get("steps"):
+        JOBS[jid]["steps"][idx]["status"] = status
+
+def deep_packet_audit(wfs, master, jid=None):
+    """Per-workflow DEEP checks: packet-vs-backend + CAQH (all elements) + Education & Training +
+    CertifyOS's own rulesEngineResults. Reads the PDF via Gemini (downloading if absent) and
+    reports a per-step progress timeline on the job. Returns (extra_flags, notes, appl_by_wf)."""
     os.makedirs(PACKETS, exist_ok=True)
     org_by_wf = {w["workflowId"]: w.get("org") for w in wfs}
-    flags, notes = [], []
+    flags, notes, appl_by_wf = [], [], {}
+    _sevmap = {"high": "error", "medium": "warning", "low": "info"}
     for m in master:
         wid = m["workflowId"]; org = org_by_wf.get(wid)
         path = os.path.join(PACKETS, f"{wid}.pdf")
-        try:  # packet-vs-backend + CAQH need the PDF
-            if not os.path.exists(path):
-                download_packet(wid, org, path)
-            _sevmap = {"high": "error", "medium": "warning", "low": "info"}
-            for pf in packet_audit.packet_audit(m, path):
-                pf["severity"] = _sevmap.get(pf.get("severity"), pf.get("severity"))
-                flags.append(pf)
-            flags += caqh_audit.caqh_audit(m, path)
-            flags += education_audit.education_audit(m, path)
+        _init_steps(jid, (m.get("demographics") or {}).get("lastName") or wid)
+        try:
+            # reuse prior AI reads if we have them; only the missing ones are (re)extracted
+            pkt = get_extraction(wid, "packet")
+            full = get_extraction(wid, "caqh")
+            edu = get_extraction(wid, "education")
+            todo = {}  # etype -> (extract_fn, step_idx)
+            if pkt is None: todo["packet"] = (packet_extract.extract, 0)
+            if full is None: todo["caqh"] = (caqh_audit.extract_caqh_full, 1)
+            if edu is None: todo["education"] = (education_audit.extract_education, 2)
+            fresh = {}
+            if todo:
+                if not os.path.exists(path):
+                    download_packet(wid, org, path)
+                for et, (_fn, idx) in todo.items():
+                    _set_step(jid, idx, "running")
+                with ThreadPoolExecutor(max_workers=3) as ex:   # 3 independent Gemini reads in parallel
+                    futs = {ex.submit(fn, path): (et, idx) for et, (fn, idx) in todo.items()}
+                    for fut in as_completed(futs):
+                        et, idx = futs[fut]
+                        try:
+                            fresh[et] = fut.result()
+                        except Exception as ex2:
+                            notes.append({"workflowId": wid, "error": f"{et}: {type(ex2).__name__}: {str(ex2)[:150]}"})
+                            fresh[et] = None
+                        _set_step(jid, idx, "done")
+                pkt = pkt if pkt is not None else fresh.get("packet")
+                full = full if full is not None else fresh.get("caqh")
+                edu = edu if edu is not None else fresh.get("education")
+                for et, val in fresh.items():   # persist only newly-read extractions
+                    if val is not None:
+                        record_extraction(org, org, wid, m.get("npi"), et, val)
+            for i in (0, 1, 2):
+                _set_step(jid, i, "done")
+            # fast checks over the (cached or fresh) extractions
+            if pkt is not None:
+                for pf in packet_audit.packet_audit(m, path, packet=pkt):
+                    pf["severity"] = _sevmap.get(pf.get("severity"), pf.get("severity"))
+                    flags.append(pf)
+            if full is not None:
+                flags += caqh_audit.caqh_audit(m, path, packet=full)
+                appl_by_wf[wid] = caqh_audit.applicability(full)
+                flags += caqh_audit.assertion_flags(m, full)
+                flags += caqh_audit.demographic_flags(m, full)
+            if edu is not None:
+                flags += education_audit.education_audit(m, path, packet=edu)
         except Exception as e:
             notes.append({"workflowId": wid, "error": f"packet: {type(e).__name__}: {str(e)[:200]}"})
-        try:  # CertifyOS's own rules engine (API, no packet)
+        # 4) CertifyOS's own rules engine (API, no packet)
+        _set_step(jid, 3, "running")
+        try:
             flags += rules_engine_results.rules_engine_flags(wid, org)
         except Exception as e:
             notes.append({"workflowId": wid, "error": f"rules-engine: {type(e).__name__}: {str(e)[:150]}"})
-    return flags, notes
+        _set_step(jid, 3, "done")
+    return flags, notes, appl_by_wf
 
 ELEMENT_LIST = ["demographics","stateLicenses","dea","boardCertifications","malpractice","specialties","educationTraining",
                 "npdb","sanctions","licensureActions","workHistory","hospitalAffiliation"]
@@ -294,7 +454,7 @@ def add_rule(rq: AddRuleReq):
         o = c["overlay"]; existing = {x.get("id") for x in o.get("customRules", [])}
         if spec["id"] in existing: spec["id"] += "_2"
         o.setdefault("customRules", []).append(spec)
-        json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+        _persist_overlay(c, rq.org)
         return {"ok": True, "rule": spec}
     elements = ELEMENT_LIST
     checks = {"field_present":"flag if a field is empty (needs: field)",
@@ -324,7 +484,7 @@ def add_rule(rq: AddRuleReq):
     o = c["overlay"]; existing = {x.get("id") for x in o.get("customRules", [])}
     if spec["id"] in existing: spec["id"] += "_2"
     o.setdefault("customRules", []).append(spec)
-    json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+    _persist_overlay(c, rq.org)
     return {"ok": True, "rule": spec}
 
 class BulkToggle(BaseModel):
@@ -338,7 +498,7 @@ def toggle_bulk(t: BulkToggle):
     for rid in t.ruleIds:
         dis.discard(rid) if t.enabled else dis.add(rid)
     o["disabledRules"] = sorted(dis)
-    json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+    _persist_overlay(c, t.org)
     return {"ok": True, "count": len(t.ruleIds)}
 
 class DeleteRuleReq(BaseModel):
@@ -351,7 +511,7 @@ def delete_rule(rq: DeleteRuleReq):
     o = c["overlay"]; before = len(o.get("customRules", []))
     o["customRules"] = [r for r in o.get("customRules", []) if r.get("id") != rq.ruleId]
     o["disabledRules"] = [d for d in o.get("disabledRules", []) if d != rq.ruleId]
-    json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+    _persist_overlay(c, rq.org)
     return {"ok": True, "removed": before - len(o["customRules"])}
 
 class AuditReq(BaseModel):
@@ -360,18 +520,21 @@ JOB_FULL = {}  # jobId -> full audit result (summary+flags) for async retrieval
 
 def do_audit(org, npis, assignedTo, limit, deep, jid=None):
     """Shared audit: resolve -> master -> rules (+deep) -> summary + flags + history rows."""
+    deep = True  # AI extraction (documents + applications) is always on
     wfs, master, flags, conf = core_audit(org, npis or None, assignedTo, limit)
     client = audit.fetch_org_names({org}).get(org, org)
     if jid: JOBS[jid]["client"] = client; JOBS[jid]["total"] = len(wfs)
     if not wfs: return {"client": client, "summary": [], "flags": [], "note": "no matching PSV-complete workflows"}
     packet_notes = []
     if deep:
-        acc = list(flags)
+        acc = list(flags); appl_by_wf = {}
         for i, m in enumerate(master):
-            pf, pn = deep_packet_audit([w for w in wfs if w["workflowId"] == m["workflowId"]], [m])
-            acc += pf; packet_notes += pn
+            pf, pn, pa = deep_packet_audit([w for w in wfs if w["workflowId"] == m["workflowId"]], [m], jid)
+            acc += pf; packet_notes += pn; appl_by_wf.update(pa)
             if jid: JOBS[jid]["processed"] = i + 1
-        flags = acc
+        # branching applicability: drop absence flags for optional elements the provider doesn't claim
+        flags = [g for f in acc
+                 for g in caqh_audit.suppress_by_applicability([f], appl_by_wf.get(f.get("workflowId")))]
     elif jid: JOBS[jid]["processed"] = len(wfs)
     by = {}
     for f in flags: by.setdefault(f["workflowId"], []).append(f)
@@ -417,6 +580,23 @@ def run_audit_async(a: AuditReq):
 def job_result(jid: str):
     return JOB_FULL.get(jid, {"pending": True})
 
+@app.get("/api/packet-url")
+def packet_url(org: str, wid: str):
+    """Fetch the (short-lived) signed PSV packet URL for a workflow so a reviewer can open/download
+    the actual packet. Fetched on demand because signed URLs expire quickly."""
+    try:
+        token = open(".token", encoding="utf-8").read().strip()
+        req = urllib.request.Request(f"{NG_API}/credentialing-workflows/{wid}",
+            headers={"Authorization": "Bearer " + token, "organization-id": org or ""})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            wf = json.load(r)
+        url = wf.get("psvFileSignedUrl")
+        if not url:
+            return {"ok": False, "reason": "No PSV packet URL is available on this workflow."}
+        return {"ok": True, "url": url}
+    except Exception as e:
+        return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:150]}"}
+
 @app.get("/api/education-insight")
 def education_insight(org: str, npi: str):
     """Standalone deep E&T insight for one provider: AI reads the application/AMA profile,
@@ -427,19 +607,86 @@ def education_insight(org: str, npi: str):
     master = master_record.build_master([w]); m = master[0] if master else None
     path = os.path.join(PACKETS, f"{wid}.pdf")
     try:
-        if not os.path.exists(path): download_packet(wid, org, path)
-        edu = education_audit.extract_education(path)
-        flags = education_audit.education_audit(m, path) if m else []
+        edu = get_extraction(wid, "education")   # reuse the audit's read (memory or BQ)
+        if edu is None:
+            if not os.path.exists(path): download_packet(wid, org, path)
+            edu = education_audit.extract_education(path)
+        flags = education_audit.education_audit(m, path, packet=edu) if m else []
     except Exception as e:
         return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
+    record_extraction(org, org, wid, npi, "education", edu)  # persist what AI read from the app
     errs = [f for f in flags if f.get("severity") == "error"]
-    conclusion = ("REVIEW — " + errs[0]["message"]) if errs else \
-        "PASS — education & training requirements appear met for this provider type."
+    hierarchy = [f for f in flags if f.get("rule") == "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED"]
+    has_board = bool((m or {}).get("boardCertifications"))
+    sources = education_audit._et_sources(m) if m else []
+    if errs:
+        conclusion = "REVIEW — " + errs[0]["message"]
+    elif hierarchy:
+        conclusion = "REVIEW — " + hierarchy[0]["message"]
+    else:
+        conclusion = "PASS — education & training requirements appear met for this provider type."
     return {"ok": True, "provider": f'{w["first"]} {w["last"]}', "npi": npi, "type": w["type"],
             "education": edu.get("education", []), "highestLevel": edu.get("highest_level"),
             "amaProfilePresent": edu.get("ama_profile_present"),
             "backendEducation": (m.get("educationTraining") if m else []),
-            "flags": flags, "conclusion": conclusion, "isReview": bool(errs)}
+            "boardCertified": has_board, "verificationSources": sources,
+            "expectedSource": ("board certification" if has_board else "licensing agency"),
+            "flags": flags, "conclusion": conclusion, "isReview": bool(errs or hierarchy)}
+
+@app.get("/api/caqh-insight")
+def caqh_insight(org: str, npi: str):
+    """Standalone CAQH insight for one provider: AI reads the CAQH application, returns
+    self-reported work history, disclosed gaps, disclosure answers, findings, and a conclusion."""
+    wfs = audit.resolve_workflows(org, [npi], limit=5)
+    if not wfs: return {"ok": False, "reason": "No PSV-complete file for that NPI."}
+    w = wfs[0]; wid = w["workflowId"]
+    master = master_record.build_master([w]); m = master[0] if master else None
+    path = os.path.join(PACKETS, f"{wid}.pdf")
+    try:
+        caqh = get_extraction(wid, "caqh")   # reuse the audit's read (memory or BQ)
+        if caqh is None:
+            if not os.path.exists(path): download_packet(wid, org, path)
+            caqh = caqh_audit.extract_caqh_full(path)   # ALL CAQH elements + supporting-doc presence
+        flags = caqh_audit.caqh_audit(m, path, packet=caqh) if m else []
+        elementRows, docRows = caqh_audit.compare_caqh_elements(m, caqh)
+        demoRows = caqh_audit.demographic_compare(m, caqh)
+        flags += caqh_audit.demographic_flags(m, caqh)
+        pkt = get_extraction(wid, "packet")   # supporting-document read (reuse audit's read)
+        if pkt is None:
+            if not os.path.exists(path): download_packet(wid, org, path)
+            pkt = packet_extract.extract(path)
+            _EXTRACT_CACHE[(wid, "packet")] = pkt
+        threeWay = caqh_audit.three_way_compare(m, pkt, caqh)
+        dem = (m or {}).get("demographics") or {}
+        required = reconcile.required_for(dem.get("providerType"), dem.get("credentialingCycle"),
+                                          reconcile.parse_states(dem.get("assignedStates") or dem.get("states")))
+        matrix = caqh_audit.element_matrix(m, pkt, caqh, required, docRows, flags)
+    except Exception as e:
+        return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
+    record_extraction(org, org, wid, npi, "caqh", caqh)  # persist what AI read from the app
+    errs = [f for f in flags if f.get("severity") == "error"]
+    docReview = [d for d in docRows if d["status"] == "review"]
+    missingDocs = [d["name"] for d in docReview]
+    elemReview = [r for r in elementRows if r["status"] == "review"]
+    demoReview = [r for r in demoRows if r["status"] == "review"]
+    isReview = bool(errs or elemReview or docReview or demoReview)
+    if errs:
+        conclusion = "REVIEW — " + errs[0]["message"]
+    elif elemReview or docReview or demoReview:
+        bits = []
+        if demoReview: bits.append(f"{len(demoReview)} identity/attestation field(s) not aligned")
+        if elemReview: bits.append(f"{len(elemReview)} element(s) not aligned between CAQH and platform")
+        if docReview: bits.append(f"{len(docReview)} supporting document(s) not reconciled with platform (BQ)")
+        conclusion = "REVIEW — " + "; ".join(bits)
+    else:
+        conclusion = "PASS — CAQH elements reconcile with platform data and supporting docs are present."
+    return {"ok": True, "provider": f'{w["first"]} {w["last"]}', "npi": npi,
+            "workHistory": caqh.get("work_history", []), "gapsDisclosed": caqh.get("gaps_disclosed", []),
+            "disclosureAnswers": caqh.get("disclosure_answers", []),
+            "backendWorkHistory": (m.get("workHistory") if m else []),
+            "demographics": demoRows, "elements": elementRows, "threeWay": threeWay,
+            "matrix": matrix, "supportingDocs": docRows, "missingDocs": missingDocs, "flags": flags,
+            "conclusion": conclusion, "isReview": isReview}
 
 @app.post("/api/audit")
 def run_audit(a: AuditReq):
@@ -456,6 +703,7 @@ def run_audit(a: AuditReq):
 
 def _pipeline_worker(jid, org, limit, deep):
     j = JOBS[jid]
+    deep = True  # AI extraction (documents + applications) is always on
     try:
         client = audit.fetch_org_names({org}).get(org, org); j["client"] = client
         wfs, master, flags, conf = core_audit(org, None, "", limit)
@@ -463,9 +711,12 @@ def _pipeline_worker(jid, org, limit, deep):
         if not wfs:
             j.update(status="done", note="no PSV-complete files", finishedAt=datetime.now(timezone.utc).isoformat()); return
         if deep:
+            appl_by_wf = {}
             for i, m in enumerate(master):
-                pf, _ = deep_packet_audit([w for w in wfs if w["workflowId"] == m["workflowId"]], [m])
-                flags += pf; j["processed"] = i + 1
+                pf, _, pa = deep_packet_audit([w for w in wfs if w["workflowId"] == m["workflowId"]], [m], jid)
+                flags += pf; appl_by_wf.update(pa); j["processed"] = i + 1
+            flags = [g for f in flags
+                     for g in caqh_audit.suppress_by_applicability([f], appl_by_wf.get(f.get("workflowId")))]
         else:
             j["processed"] = len(wfs)
         summary = [{"workflowId": w["workflowId"], "responsible": w.get("responsible")} for w in wfs]

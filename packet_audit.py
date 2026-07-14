@@ -47,11 +47,25 @@ def last_name(full):
     parts = re.sub(r"[.,]", " ", str(full or "")).split()
     return parts[-1].lower() if parts else ""
 
+_SUFFIX = {"jr", "sr", "ii", "iii", "iv", "md", "do", "np", "pa", "phd", "dnp", "aprn", "rn"}
+
+def _name_tokens(s):
+    """Alpha tokens of a name, lowercased, dropping single initials and credential suffixes."""
+    return {t for t in re.split(r"[^a-z]+", str(s or "").lower())
+            if len(t) > 1 and t not in _SUFFIX}
+
 def names_match(a, b, threshold=0.85):
-    a, b = a.lower().strip(), b.lower().strip()
+    """Tolerant name match: order-independent and middle-name/initial-tolerant, so
+    'MATTHEWS, LINDA JOSEPHINE' matches 'Linda Matthews'. Requires first+last to line up."""
+    a, b = str(a or "").lower().strip(), str(b or "").lower().strip()
     if not a or not b:
         return False
     if a == b:
+        return True
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if ta and tb and (ta <= tb or tb <= ta):    # one name's tokens contained in the other's
+        return True
+    if len(ta & tb) >= 2:                        # first AND last (or two name parts) in common
         return True
     return SequenceMatcher(None, a, b).ratio() >= threshold
 
@@ -74,12 +88,12 @@ def assigned_states(record):
                     out.add(norm_state(v))
     return {s for s in out if s}
 
-def _flag(record, packet, element, state, rule, severity, confidence, message):
+def _flag(record, packet, element, state, rule, severity, confidence, message, category=None):
     demo = record.get("demographics") or {}
     provider = packet.get("provider_name") or " ".join(
         p for p in (demo.get("firstName"), demo.get("lastName")) if p
     )
-    return {
+    f = {
         "workflowId": record.get("workflowId"),
         "provider": provider,
         "npi": demo.get("npi") or packet.get("npi"),
@@ -91,6 +105,9 @@ def _flag(record, packet, element, state, rule, severity, confidence, message):
         "message": message,
         "flagClass": "packet-vs-backend",
     }
+    if category:
+        f["category"] = category
+    return f
 
 # ---------------------------------------------------------------- checks
 
@@ -170,6 +187,27 @@ def check_malpractice(record, packet):
             ))
     return flags
 
+def check_board_certs(record, packet):
+    """Board-certification value MISMATCH (expiration) between packet and backend, per specialty."""
+    flags = []
+    backend = record.get("boardCertifications") or []
+    pkt = packet.get("board_certifications") or []
+    if not backend or not pkt:
+        return flags
+    pkt_by_spec = {norm_status(p.get("specialty")): p for p in pkt}
+    for bc in backend:
+        pc = pkt_by_spec.get(norm_status(bc.get("specialty"))) or (pkt[0] if len(pkt) == 1 else None)
+        if not pc:
+            continue
+        b_exp, p_exp = norm_date(bc.get("expiration_date")), norm_date(pc.get("expiration_date"))
+        if b_exp and p_exp and b_exp != p_exp:
+            flags.append(_flag(
+                record, packet, "boardCertifications", None,
+                "PACKET_BOARDCERT_MISMATCH", "medium", 0.7,
+                f"Board certification ({bc.get('specialty') or ''}) expiration disagrees between "
+                f"packet and backend: backend={b_exp} packet={p_exp}.", category="Board Certifications"))
+    return flags
+
 def check_documents(record, packet):
     flags = []
     docs = " | ".join(str(d).lower() for d in (packet.get("documents_present") or []))
@@ -197,27 +235,126 @@ def check_documents(record, packet):
         ))
     return flags
 
-def check_name(record, packet):
+def _backend_name(record):
     demo = record.get("demographics") or {}
-    backend_last = str(demo.get("lastName") or "").strip()
-    packet_last = last_name(packet.get("provider_name"))
-    if backend_last and packet_last and not names_match(backend_last, packet_last):
-        return [_flag(
-            record, packet, "name", None,
+    return " ".join(p for p in (demo.get("firstName"), demo.get("lastName")) if p).strip()
+
+def check_demographics(record, packet):
+    """Demographic MISMATCH checks (not just presence): name + NPI on the packet, plus the
+    name printed on each source document (license / DEA certificate) vs the applicant."""
+    flags = []
+    demo = record.get("demographics") or {}
+    b_name = _backend_name(record)
+    b_last = str(demo.get("lastName") or "").strip()
+    b_npi = norm_id(demo.get("npi"))
+
+    # 1) provider name on the packet vs backend (tolerant, last-name level)
+    p_last = last_name(packet.get("provider_name"))
+    if b_last and p_last and not names_match(b_last, p_last):
+        flags.append(_flag(
+            record, packet, "demographics", None,
             "PACKET_NAME_MISMATCH", "high", 0.9,
-            f"Packet provider name '{packet.get('provider_name')}' last name "
-            f"'{packet_last}' does not match backend lastName '{backend_last}'.",
-        )]
-    return []
+            f"Packet provider name '{packet.get('provider_name')}' (last '{p_last}') "
+            f"does not match backend lastName '{b_last}'.", category="Provider Demographics"))
+
+    # 2) NPI on the packet vs backend
+    p_npi = norm_id(packet.get("npi"))
+    if b_npi and p_npi and b_npi != p_npi:
+        flags.append(_flag(
+            record, packet, "demographics", None,
+            "PACKET_NPI_MISMATCH", "high", 0.9,
+            f"NPI on the packet ({packet.get('npi')}) does not match the backend NPI "
+            f"({demo.get('npi')}).", category="Provider Demographics"))
+
+    # 3) name printed on each source document vs the applicant
+    def name_on_doc(doc_label, printed):
+        if b_name and printed and not names_match(b_name, printed):
+            flags.append(_flag(
+                record, packet, "demographics", None,
+                "PACKET_DOC_NAME_MISMATCH", "medium", 0.75,
+                f"Name on the {doc_label} ('{printed}') does not match the applicant '{b_name}'.",
+                category="Provider Demographics"))
+    for pl in packet.get("state_licenses") or []:
+        name_on_doc(f"{norm_state(pl.get('state')) or ''} license document".strip(), pl.get("holder_name"))
+    for d in packet.get("dea") or []:
+        name_on_doc("DEA certificate", d.get("registrant_name"))
+    return flags
+
+def check_dea(record, packet):
+    """DEA MISMATCH / missing-in-packet vs backend, per registration."""
+    flags = []
+    backend = record.get("dea") or []
+    if not backend:
+        return flags
+    pkt = packet.get("dea") or []
+    pkt_by_num = {norm_id(d.get("number")): d for d in pkt if d.get("number")}
+    for bd in backend:
+        b_num = norm_id(bd.get("dea_number") or bd.get("number"))
+        pd = pkt_by_num.get(b_num) if b_num else None
+        if pd is None:  # fall back to a same-state DEA in the packet
+            pd = next((d for d in pkt if norm_state(d.get("state")) == norm_state(bd.get("state"))
+                       and norm_state(bd.get("state"))), None)
+        if pd is None:
+            flags.append(_flag(
+                record, packet, "dea", norm_state(bd.get("state")) or None,
+                "PACKET_DEA_MISSING_IN_PACKET", "medium", 0.7,
+                f"Backend has a DEA registration ({bd.get('dea_number') or bd.get('number')}) "
+                f"not found in the packet.", category="DEA / CDS"))
+            continue
+        diffs = []
+        p_num = norm_id(pd.get("number"))
+        if b_num and p_num and b_num != p_num:
+            diffs.append(f"number backend={bd.get('dea_number') or bd.get('number')} packet={pd.get('number')}")
+        b_exp, p_exp = norm_date(bd.get("expiration_date")), norm_date(pd.get("expiration_date"))
+        if b_exp and p_exp and b_exp != p_exp:
+            diffs.append(f"expiration backend={b_exp} packet={p_exp}")
+        b_st, p_st = norm_state(bd.get("state")), norm_state(pd.get("state"))
+        if b_st and p_st and b_st != p_st:
+            diffs.append(f"state backend={b_st} packet={p_st}")
+        if diffs:
+            flags.append(_flag(
+                record, packet, "dea", b_st or None,
+                "PACKET_DEA_MISMATCH", "high", 0.8,
+                "DEA registration disagrees between packet and backend: "
+                + "; ".join(diffs) + ".", category="DEA / CDS"))
+    return flags
+
+def check_npdb(record, packet):
+    """NPDB report identity MISMATCH: the report in the packet must be about THIS applicant."""
+    flags = []
+    npdb = packet.get("npdb") or {}
+    if not (npdb.get("present") or packet.get("npdb_report_present")):
+        return flags  # doc-presence handled by check_documents
+    demo = record.get("demographics") or {}
+    b_name = _backend_name(record)
+    b_npi = norm_id(demo.get("npi"))
+    diffs = []
+    subj = npdb.get("subject_name")
+    if b_name and subj and not names_match(b_name, subj):
+        diffs.append(f"subject name report='{subj}' applicant='{b_name}'")
+    p_npi = norm_id(npdb.get("npi"))
+    if b_npi and p_npi and b_npi != p_npi:
+        diffs.append(f"NPI report={npdb.get('npi')} backend={demo.get('npi')}")
+    if diffs:
+        flags.append(_flag(
+            record, packet, "npdb", None,
+            "PACKET_NPDB_MISMATCH", "high", 0.85,
+            "NPDB report identity does not match the applicant: " + "; ".join(diffs) + ".",
+            category="NPDB"))
+    return flags
 
 # ---------------------------------------------------------------- entry point
 
-def packet_audit(master_record, pdf_path):
-    """Extract the packet at pdf_path and return a list of packet-vs-backend flags."""
-    packet = packet_extract.extract(pdf_path)
+def packet_audit(master_record, pdf_path, packet=None):
+    """Extract the packet at pdf_path and return a list of packet-vs-backend flags.
+    Pass ``packet`` (a packet_extract.extract result) to reuse an existing read."""
+    packet = packet if packet is not None else packet_extract.extract(pdf_path)
     flags = []
-    flags += check_name(master_record, packet)
+    flags += check_demographics(master_record, packet)
     flags += check_licenses(master_record, packet)
+    flags += check_dea(master_record, packet)
+    flags += check_npdb(master_record, packet)
+    flags += check_board_certs(master_record, packet)
     flags += check_malpractice(master_record, packet)
     flags += check_documents(master_record, packet)
     return flags

@@ -57,7 +57,8 @@ def fetch_timeline(edit_provider_ids):
     F = {"attestationDate": P+"attestationDate", "decisionDate": P+"credentialingDecisionDate",
          "psvCompleteDate": P+"psvCompleteDate", "nextCredentialingDate": P+"nextCredentialingDate",
          "receivedForCredentialingDate": P+"receivedForCredentialingDate",
-         "lastCredentialedDate": P+"lastCredentialedDate", "credentialingCycle": "credentialingCycle"}
+         "lastCredentialedDate": P+"lastCredentialedDate", "credentialingCycle": "credentialingCycle",
+         "dateOfBirth": "dateOfBirth", "gender": "gender", "caqhProviderId": "caqhProviderId"}
     sel = ", ".join(f"MAX({v}) {k}" for k, v in F.items())
     sql = f"SELECT edit_provider_id, {sel} FROM `{DATASET}.edit_providers` WHERE edit_provider_id IN ({ids}) GROUP BY edit_provider_id"
     return {r["edit_provider_id"]: {k: str(r[k]) if r[k] else None for k in F} for r in bq_json(sql)}
@@ -107,7 +108,12 @@ def build_master(wfs, quiet=True, status="PSV complete by CertifyOS"):
     for epid, wf in epid_to_wf.items():
         tl = timeline.get(epid, {})
         master[wf["workflowId"]]["timeline"] = tl
-        master[wf["workflowId"]]["demographics"]["credentialingCycle"] = tl.get("credentialingCycle") or wf.get("cycle")
+        demo = master[wf["workflowId"]]["demographics"]
+        demo["credentialingCycle"] = tl.get("credentialingCycle") or wf.get("cycle")
+        demo["dateOfBirth"] = tl.get("dateOfBirth")
+        demo["gender"] = tl.get("gender")
+        demo["caqhId"] = tl.get("caqhProviderId")
+        demo["attestationDate"] = tl.get("attestationDate")
 
     for elem, table in ELEMENTS.items():
         try:

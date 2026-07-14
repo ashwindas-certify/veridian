@@ -8,7 +8,10 @@ create-*.json
 # PHI / generated data
 packets/
 *.pdf
+*.jsonl
 audit_history.jsonl
+application_extractions.jsonl
+*.log
 *.csv
 *.xlsx
 master_records.json

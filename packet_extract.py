@@ -13,14 +13,20 @@ Extract ONLY what is actually present in the document, as JSON with this shape:
 {
  "provider_name": string,
  "npi": string,
- "state_licenses": [{"state","license_number","status","expiration_date","source"}],
- "dea": [{"number","state","expiration_date"}],
+ "date_of_birth": string,
+ "state_licenses": [{"state","license_number","status","expiration_date","source","holder_name"}],
+ "dea": [{"number","state","expiration_date","registrant_name"}],
  "board_certifications": [{"specialty","expiration_date"}],
  "malpractice": [{"carrier","policy_number","expiration_date","occurrence_amount","aggregate_amount"}],
  "npdb_report_present": boolean,
+ "npdb": {"present": boolean, "subject_name": string, "npi": string, "date_of_birth": string, "report_count": number},
  "sanctions_screened": [ "OIG","SAM", ... ],
  "documents_present": [ short labels of each distinct document/section you see ]
 }
+Notes:
+- holder_name / registrant_name / subject_name are the person the license / DEA certificate / NPDB
+  report is issued to, exactly as printed on that document (so a mismatch vs the applicant can be caught).
+- npdb.report_count is the number of NPDB reports/disclosures on the report (0 if the report is clear).
 Dates as YYYY-MM-DD when possible. Do not invent values."""
 
 def extract(pdf_path):

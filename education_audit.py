@@ -104,11 +104,70 @@ def _describe(e):
     return " ".join(parts)
 
 
+# Which primary source the E&T verification cites. NCQA hierarchy (per client guidelines):
+#   board certified   -> verify E&T THROUGH the board certification (highest source)
+#   not board certified -> verify E&T through the state LICENSING agency (fallback source)
+# NOTE: keep board tokens SPECIFIC — a bare "board" would also match "State Medical Board"
+# (a licensing agency), collapsing the hierarchy. Licensing tokens are checked first.
+_BOARD_SRC = ("abms", "american board", "certifying board", "board cert", "board-cert", "certif", "abpn")
+_LICENSE_SRC = ("licens", "state board", "state medical", "medical board", "osteopathic board",
+                "ama", "physician profile", "ecfmg", "fsmb", "school", "university")
+
+
+def _et_sources(master_record):
+    """Every source label the backend used to verify this provider's education/training."""
+    srcs = []
+    for e in master_record.get("educationTraining") or []:
+        if e.get("source"):
+            srcs.append(str(e["source"]))
+    for v in master_record.get("appVerifications") or []:
+        vt = (v.get("verification_type") or "").lower()
+        if "edu" in vt or "train" in vt:
+            if v.get("source"):
+                srcs.append(str(v["source"]))
+    return srcs
+
+
+def _matches(text, needles):
+    return any(n in text for n in needles)
+
+
+def check_source_hierarchy(master_record, packet, has_board_cert):
+    """Read the E&T verification source and confirm it followed the board-cert-vs-licensing
+    hierarchy. Flags when the wrong tier was used (e.g. board certified but verified through the
+    licensing agency, or not board certified but no acceptable licensing-agency source cited)."""
+    srcs = _et_sources(master_record)
+    if not srcs:
+        return []  # no source recorded -> presence handled by EDU_NOT_VERIFIED_IN_BACKEND
+    src_text = " | ".join(srcs).lower()
+    used_board = _matches(src_text, _BOARD_SRC)
+    used_license = _matches(src_text, _LICENSE_SRC)
+    flags = []
+    if has_board_cert:
+        expected = "board-certified provider: verify E&T THROUGH the board certification"
+        if not used_board and used_license:
+            flags.append(_flag(
+                master_record, packet, "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED", "warning", 0.7,
+                "Provider is board certified, so E&T should be verified through the board "
+                f"certification, but the recorded source is the licensing agency: [{', '.join(srcs)}].",
+                expected))
+    else:
+        expected = "non-board-certified provider: verify E&T through the licensing agency"
+        if not used_license:
+            flags.append(_flag(
+                master_record, packet, "EDU_SOURCE_HIERARCHY_NOT_FOLLOWED", "warning", 0.68,
+                "Provider is not board certified, so E&T should be verified through the licensing "
+                f"agency, but the recorded source does not indicate one: [{', '.join(srcs)}].",
+                expected))
+    return flags
+
+
 # ---------------------------------------------------------------- entry point
 
-def education_audit(master_record, pdf_path):
-    """Extract education/training from the packet and return education flags."""
-    packet = extract_education(pdf_path)
+def education_audit(master_record, pdf_path, packet=None):
+    """Extract education/training from the packet and return education flags.
+    Pass ``packet`` (an extract_education result) to reuse an existing read."""
+    packet = packet if packet is not None else extract_education(pdf_path)
     education = packet.get("education") or []
     highest_level = packet.get("highest_level") or "Unknown"
 
@@ -186,6 +245,9 @@ def education_audit(master_record, pdf_path):
             f"backend has no verified education/training on record.",
             "education/training must be verified from primary source",
         ))
+
+    # 3b) Verification-source hierarchy: board cert (if certified) else licensing agency.
+    flags += check_source_hierarchy(master_record, packet, has_board_cert)
 
     # 4) Info summary so reviewers can see the check ran.
     types_seen = ", ".join(sorted({(e.get("type") or "Other") for e in education})) or "none"
