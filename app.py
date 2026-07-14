@@ -17,6 +17,7 @@ def record_history(org, client, summary, flags, run_mode="audit"):
     resp = {s["workflowId"]: s.get("responsible") for s in summary}
     rows = [{"run_ts": ts, "run_mode": run_mode, "org": org, "client": client,
              "workflow_id": f.get("workflowId"), "provider": f.get("provider"), "npi": f.get("npi"),
+             "state": f.get("state"), "provider_type": f.get("providerType"),
              "responsible": resp.get(f.get("workflowId"), "(unassigned)"), "severity": f.get("severity"),
              "category": f.get("category") or reconcile.categorize(f.get("rule", "")), "element": f.get("element"),
              "rule": f.get("rule"), "confidence": f.get("confidence"), "message": f.get("message"),
@@ -326,6 +327,20 @@ def add_rule(rq: AddRuleReq):
     json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
     return {"ok": True, "rule": spec}
 
+class BulkToggle(BaseModel):
+    org: str; ruleIds: list = []; enabled: bool = True
+@app.post("/api/rules/toggle-bulk")
+def toggle_bulk(t: BulkToggle):
+    """Enable/disable many rules at once (per-section 'toggle all')."""
+    c = find_client(t.org)
+    if not c: return {"ok": False, "reason": "no client config"}
+    o = c["overlay"]; dis = set(o.get("disabledRules", []))
+    for rid in t.ruleIds:
+        dis.discard(rid) if t.enabled else dis.add(rid)
+    o["disabledRules"] = sorted(dis)
+    json.dump(o, open(c["file"], "w", encoding="utf-8"), indent=2)
+    return {"ok": True, "count": len(t.ruleIds)}
+
 class DeleteRuleReq(BaseModel):
     org: str; ruleId: str
 @app.post("/api/rules/delete")
@@ -368,7 +383,8 @@ def do_audit(org, npis, assignedTo, limit, deep, jid=None):
             "auditConfidence": conf.get(w["workflowId"]), "errors": errs, "flags": len(fl),
             "status": "REVIEW" if errs else ("CHECK" if fl else "CLEAN"), "workflowId": w["workflowId"]})
     rows = record_history(org, client, summary, flags)
-    return {"client": client, "summary": summary, "flags": flags, "packetNotes": packet_notes, "_rows": rows}
+    return {"client": client, "summary": summary, "flags": flags, "packetNotes": packet_notes,
+            "master": master if len(master) <= 30 else None, "_rows": rows}
 
 def _audit_worker(jid, a):
     j = JOBS[jid]
@@ -556,7 +572,7 @@ def ask(q: Ask):
 def job_export(jid: str):
     """Export a single request's (job's) findings as CSV."""
     rows = JOB_RESULTS.get(jid, [])
-    cols = ["run_ts","client","workflow_id","provider","npi","responsible","severity","category","element","rule","confidence","message"]
+    cols = ["run_ts","client","workflow_id","provider","npi","provider_type","state","responsible","severity","category","element","rule","confidence","message"]
     buf = io.StringIO(); w = _csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore"); w.writeheader()
     for r in rows: w.writerow({k: ("" if r.get(k) is None else str(r.get(k))) for k in cols})
     return Response(content=buf.getvalue(), media_type="text/csv",
@@ -565,7 +581,7 @@ def job_export(jid: str):
 @app.get("/api/history.csv")
 def history_csv(org: str = None):
     """Export the full audit history (BQ) as a CSV download."""
-    cols = ["run_ts","run_mode","client","org","workflow_id","provider","npi","responsible",
+    cols = ["run_ts","run_mode","client","org","workflow_id","provider","npi","provider_type","state","responsible",
             "severity","category","element","rule","confidence","message"]
     sql = f"SELECT {','.join(cols)} FROM `{HISTORY_TABLE}`"
     if org and org != "ALL": sql += f" WHERE org = '{org}'"

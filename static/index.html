@@ -101,6 +101,7 @@
       <select id="recType" onchange="renderRecords()"><option value="">Any type</option></select>
       <select id="recAnalyst" onchange="renderRecords()"><option value="">Any analyst</option></select>
       <label style="font-size:.82rem;display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap"><span id="recDpSw" class="sw" onclick="recDp=!recDp;this.classList.toggle('on',recDp)"></span>Deep (AI)</label>
+      <button class="btn btn-ghost" onclick="clearRecFilters()">Clear</button>
     </div>
     <div class="flex items-center gap-2 mb-2" style="flex-wrap:wrap">
       <div id="recMeta" style="font-size:.82rem;color:var(--muted)"></div>
@@ -165,6 +166,7 @@
       <select id="rfElement" onchange="renderRulesList()" style="min-width:150px"><option value="">All elements</option></select>
       <select id="rfSev" onchange="renderRulesList()" style="min-width:130px"><option value="">All severities</option><option>error</option><option>warning</option><option>info</option></select>
       <select id="rfStatus" onchange="renderRulesList()" style="min-width:130px"><option value="">On &amp; off</option><option value="on">Enabled</option><option value="off">Disabled</option></select>
+      <button class="btn btn-ghost" onclick="clearRuleFilters()">Clear</button>
       <button class="btn btn-ghost" onclick="expandAll(true)">Expand</button>
       <button class="btn btn-ghost" onclick="expandAll(false)">Collapse</button>
     </div>
@@ -229,11 +231,19 @@ function enhanceSelect(sel){
   const lbl=()=>{const o=sel.options[sel.selectedIndex];return o?o.textContent:'';};
   const render=()=>{btn.innerHTML=`<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${lbl()||'—'}</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>`;};
   btn.onclick=e=>{e.stopPropagation();const open=menu.style.display==='block';document.querySelectorAll('.xsel-menu').forEach(m=>m.style.display='none');
-    if(!open){menu.innerHTML=[...sel.options].map((o,i)=>`<div class="xsel-opt${i===sel.selectedIndex?' sel':''}" data-i="${i}"><span>${o.textContent}</span>${i===sel.selectedIndex?'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>':''}</div>`).join('');menu.style.display='block';}};
+    if(!open){const many=sel.options.length>8;
+      const opts=[...sel.options].map((o,i)=>`<div class="xsel-opt${i===sel.selectedIndex?' sel':''}" data-i="${i}"><span>${o.textContent}</span>${i===sel.selectedIndex?'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>':''}</div>`).join('');
+      menu.innerHTML=(many?`<input class="xsel-search" placeholder="Type to filter…" onclick="event.stopPropagation()" oninput="var q=this.value.toLowerCase();this.parentNode.querySelectorAll('.xsel-opt').forEach(function(o){o.style.display=o.textContent.toLowerCase().indexOf(q)>-1?'':'none';})" style="width:100%;margin-bottom:6px;position:sticky;top:0">`:'')+opts;
+      menu.style.display='block';if(many)setTimeout(()=>{var s=menu.querySelector('.xsel-search');if(s)s.focus();},0);}};
   menu.onclick=e=>{const o=e.target.closest('.xsel-opt');if(!o)return;sel.selectedIndex=+o.dataset.i;render();menu.style.display='none';sel.dispatchEvent(new Event('change'));};
-  render();new MutationObserver(render).observe(sel,{childList:true});
+  render();new MutationObserver(render).observe(sel,{childList:true});sel.addEventListener('change',render);
 }
 function enhanceAll(){document.querySelectorAll('select').forEach(enhanceSelect);}
+function _clearSel(id){const s=$(id);if(s){s.selectedIndex=0;s.dispatchEvent(new Event('change'));}}
+function clearRuleFilters(){$('rfSearch').value='';['rfElement','rfSev','rfStatus'].forEach(_clearSel);renderRulesList();}
+function clearRecFilters(){$('recSearch').value='';['recFileType','recCycle','recState','recType','recAnalyst'].forEach(_clearSel);renderRecords();}
+async function toggleCatAll(cat,enabled){const ids=(RULES_CACHE[cat]||[]).map(r=>r.id);(RULES_CACHE[cat]||[]).forEach(r=>r.enabled=enabled);renderRulesList();
+  await fetch('/api/rules/toggle-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org:ORG,ruleIds:ids,enabled})});}
 const sevCol=s=>s==='error'?'var(--err)':s==='warning'?'var(--warn)':'var(--teal-d)';
 function toggleMode(){const d=document.body.classList.toggle('dark');localStorage.credcheckDark=d?'1':'';$('modeBtn').textContent=d?'☀':'🌙';}
 if(localStorage.credcheckDark){document.body.classList.add('dark');}
@@ -255,7 +265,7 @@ function renderRecords(){const fr=recFiltered();
   $('recMeta').textContent=`${fr.length} of ${RECORDS.length} files${fr.length>300?' (showing first 300)':''}`;
   $('recTable').innerHTML='<tr><th style="width:26px"><input type="checkbox" onchange="document.querySelectorAll(\'.recCk\').forEach(c=>c.checked=this.checked)"></th><th>Provider</th><th>NPI</th><th>Type</th><th>File type</th><th>Cycle</th><th>States</th><th>Analyst</th><th>Status</th><th></th></tr>'+
     fr.slice(0,300).map(r=>`<tr><td><input type="checkbox" class="recCk" value="${r.npi}"></td>
-    <td><a onclick="auditFile('${r.workflowId}','${r.npi}')" style="font-weight:600;color:var(--teal-d);cursor:pointer">${r.provider}</a></td>
+    <td><a onclick="openOrAudit('${r.workflowId}','${r.npi}')" style="font-weight:600;color:var(--teal-d);cursor:pointer">${r.provider}</a></td>
     <td>${r.npi}</td><td>${r.type||''}</td><td>${r.fileType||''}</td><td>${r.cycle||''}</td><td>${r.states||''}</td><td>${r.responsible||''}</td>
     <td>${statusChip(r.workflowId)}</td>
     <td><button class="btn btn-ghost" style="padding:.35rem .8rem" onclick="auditFile('${r.workflowId}','${r.npi}')">Run</button></td></tr>`).join('');}
@@ -356,21 +366,28 @@ async function runAudit(){
 }
 const ALL_ELEMENTS=['demographics','stateLicenses','dea','boardCertifications','malpractice','specialties','educationTraining','workHistory','npdb','sanctions','licensureActions','hospitalAffiliation'];
 function closeDetail(){$('detailModal').style.display='none';}
-function openDetail(wid){if(!LAST)return;const p=LAST.summary.find(s=>s.workflowId===wid)||{};
-  const byEl={};LAST.flags.filter(f=>f.workflowId===wid).forEach(f=>(byEl[f.element]=byEl[f.element]||[]).push(f));
+function elemSummary(m,el){if(!m)return 'passed all active checks';
+  if(el==='demographics'){const d=m.demographics||{};return `${d.firstName||''} ${d.lastName||''} · NPI ${d.npi||''} · ${d.providerType||''} · ${d.states||''}`.replace(/\s+·\s+·/g,' ·').trim();}
+  const rows=m[el]||[];if(!rows.length)return 'no records on the platform';
+  return `${rows.length} record(s) checked — `+rows.slice(0,4).map(r=>[r.state,r.license_number,r.dea_number,r.policy_number,r.sanction_type,r.specialty,(r.license_status||r.status||r.type_of_action||r.report_type),String(r.expiration_date||'').slice(0,10)].filter(Boolean).join(' ')).join('  |  ');}
+function openDetail(wid){if(!LAST)return;const p=(LAST.summary||[]).find(s=>s.workflowId===wid)||{};
+  const m=(LAST.master||[]).find(x=>x.workflowId===wid);
+  const byEl={};(LAST.flags||[]).filter(f=>f.workflowId===wid).forEach(f=>(byEl[f.element]=byEl[f.element]||[]).push(f));
   const rows=ALL_ELEMENTS.map(el=>{const efs=byEl[el]||[];
     const worst=efs.some(f=>f.severity==='error')?'error':efs.some(f=>f.severity==='warning')?'warning':efs.length?'info':'ok';
     const col=worst==='error'?'var(--err)':worst==='warning'?'var(--warn)':worst==='info'?'var(--teal-d)':'var(--ok)';
     return `<div style="padding:.7rem .1rem;border-bottom:1px solid var(--line)">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="width:22px;height:22px;border-radius:50%;background:${col};color:#fff;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto">${worst==='ok'?ic('check',14):ic('x',14)}</span>
-        <span style="font-weight:600">${el}</span>
+        <span style="font-weight:600;text-transform:capitalize">${el}</span>
         <span style="margin-left:auto;font-size:.72rem;color:${col};font-weight:700">${worst==='ok'?'PASS':worst.toUpperCase()}</span></div>`+
-      efs.map(f=>`<div style="margin-left:32px;margin-top:5px;font-size:.82rem"><b>Found:</b> ${f.message}${f.expected?`<div style="color:var(--muted);font-size:.78rem">↳ Guideline: ${f.expected}</div>`:''}</div>`).join('')+`</div>`;}).join('');
+      (efs.length?efs.map(f=>`<div style="margin-left:32px;margin-top:5px;font-size:.82rem"><b>Found:</b> ${f.message}${f.expected?`<div style="color:var(--muted);font-size:.78rem">↳ Guideline: ${f.expected}</div>`:''}</div>`).join('')
+        :`<div style="margin-left:32px;margin-top:4px;font-size:.8rem;color:var(--muted)">✓ Verified — ${elemSummary(m,el)}</div>`)+`</div>`;}).join('');
   $('detailBody').innerHTML=`<div style="font-weight:700;font-size:1.1rem">${p.provider||wid}</div>
     <div style="color:var(--muted);font-size:.82rem;margin-bottom:6px">NPI ${p.npi||''} · ${p.type||''} · ${p.states||''} · audit confidence ${p.auditConfidence??''}</div>
     <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:8px 0">Platform vs application — element checks</div>${rows}`;
   $('detailModal').style.display='flex';}
+function openOrAudit(wid,npi){if(LASTMAP[wid])openDetail(wid);else auditFile(wid,npi);}
 function sortBy(k){SORT.dir=(SORT.key===k)?-SORT.dir:1;SORT.key=k;renderResults();}
 function renderResults(){
   if(!LAST)return;const q=$('fSearch').value.toLowerCase(),st=$('fStatus').value,sv=$('fSev').value;
@@ -482,7 +499,10 @@ function renderRulesList(){
     if(!fr.length)return '';shown+=fr.length;const on=fr.filter(x=>x.enabled).length;
     return `<div class="card"><div onclick="toggleCat(this)" style="cursor:pointer;padding:.9rem 1.1rem;display:flex;justify-content:space-between;align-items:center">
       <div style="font-weight:600;color:var(--teal-d)">${cat} <span style="color:var(--muted);font-weight:400;font-size:.8rem">· ${on}/${fr.length} on</span></div>
-      <span class="caret" style="color:var(--muted);transition:transform .2s;display:inline-block">▸</span></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="btn btn-ghost" style="padding:.2rem .55rem;font-size:.7rem" onclick="event.stopPropagation();toggleCatAll(this.dataset.c,true)" data-c="${cat}">All on</button>
+        <button class="btn btn-ghost" style="padding:.2rem .55rem;font-size:.7rem" onclick="event.stopPropagation();toggleCatAll(this.dataset.c,false)" data-c="${cat}">All off</button>
+        <span class="caret" style="color:var(--muted);transition:transform .2s;display:inline-block">▸</span></div></div>
       <div class="catbody" style="display:none;padding:0 1.1rem 1rem">${fr.map(ruleRow).join('')}</div></div>`;}).join('');
   $('rulesBody').innerHTML=`<div style="color:var(--muted);font-size:.8rem;margin:2px 0 10px">${shown} rule(s)${filtered?' match':''} · <b>${RULES_CLIENT}</b> — changes save instantly.</div>`+
     (body||'<div style="color:var(--muted);padding:12px">No rules match — clear the filters.</div>');

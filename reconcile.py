@@ -107,7 +107,13 @@ def coverage_min_matrix(row, r, c):
     mins = entry.get("all") or (entry.get("prescriber") if is_prescriber(dem["providerType"]) else entry.get("nonprescriber"))
     if not mins: return True
     occ = parse_money(row.get("occurrence_coverage_amount")); agg = parse_money(row.get("aggregate_coverage_amount"))
-    return (occ is not None and occ >= mins[0]) and (agg is not None and agg >= mins[1])
+    ok = (occ is not None and occ >= mins[0]) and (agg is not None and agg >= mins[1])
+    if not ok:
+        row["_covfound"] = f"${(occ or 0):,}/${(agg or 0):,}"
+        row["_covreq"] = f"${mins[0]:,}/${mins[1]:,}"
+        row["_covstate"] = st or "?"
+        row["_covtype"] = "prescriber" if is_prescriber(dem["providerType"]) else "non-prescriber"
+    return ok
 
 PRIMS = {"status_in": status_in, "not_expired": not_expired, "coverage_min": coverage_min,
     "active_but_expired": active_but_expired, "field_present": field_present, "date_order": date_order,
