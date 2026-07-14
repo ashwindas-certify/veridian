@@ -417,6 +417,30 @@ def run_audit_async(a: AuditReq):
 def job_result(jid: str):
     return JOB_FULL.get(jid, {"pending": True})
 
+@app.get("/api/education-insight")
+def education_insight(org: str, npi: str):
+    """Standalone deep E&T insight for one provider: AI reads the application/AMA profile,
+    returns the education it found, backend education, findings, and a conclusion."""
+    wfs = audit.resolve_workflows(org, [npi], limit=5)
+    if not wfs: return {"ok": False, "reason": "No PSV-complete file for that NPI."}
+    w = wfs[0]; wid = w["workflowId"]
+    master = master_record.build_master([w]); m = master[0] if master else None
+    path = os.path.join(PACKETS, f"{wid}.pdf")
+    try:
+        if not os.path.exists(path): download_packet(wid, org, path)
+        edu = education_audit.extract_education(path)
+        flags = education_audit.education_audit(m, path) if m else []
+    except Exception as e:
+        return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
+    errs = [f for f in flags if f.get("severity") == "error"]
+    conclusion = ("REVIEW — " + errs[0]["message"]) if errs else \
+        "PASS — education & training requirements appear met for this provider type."
+    return {"ok": True, "provider": f'{w["first"]} {w["last"]}', "npi": npi, "type": w["type"],
+            "education": edu.get("education", []), "highestLevel": edu.get("highest_level"),
+            "amaProfilePresent": edu.get("ama_profile_present"),
+            "backendEducation": (m.get("educationTraining") if m else []),
+            "flags": flags, "conclusion": conclusion, "isReview": bool(errs)}
+
 @app.post("/api/audit")
 def run_audit(a: AuditReq):
     npis = [n.strip() for n in a.npis.replace("\n", ",").split(",") if n.strip()]
